@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Button, CraftButton, CraftButtonLabel, CraftButtonIcon } from "@/components/ui/button";
@@ -10,6 +10,9 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Form, FormControl, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import Link from "next/link";
+import { Chakra_Petch } from 'next/font/google';
+
+const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
 
 const formSchema = z.object({
     email: z.string().trim().email(),
@@ -30,14 +33,17 @@ export const SignInCard = () => {
     };
 
     return (
-        <Card className="w-full max-w-sm shadow-none">
-            <CardHeader className="flex items-center justify-center text-center p-4">
-                <CardTitle className="text-lg">
+        <Card variant="glass" className="w-full max-w-sm gap-0">
+            <CardHeader className="flex flex-col items-left text-center p-4 gap-1">
+                <CardTitle className={`${chakraPetch.className} text-4xl`}>
                     Login
                 </CardTitle>
+                <CardDescription className="text-gray-800">
+                    Welcome back, please log in to your account
+                </CardDescription>
             </CardHeader>
             <div className="px-4">
-                <Separator />
+                <Separator className="bg-white/30" />
             </div>
             <CardContent className="p-4">
                 <Form {...form}>
@@ -45,7 +51,7 @@ export const SignInCard = () => {
                     <FormField name="email" control={form.control} render={({ field }) => (
                         <FormItem>
                             <FormControl>
-                                <Input {...field} type="email" placeholder="Enter email address"/>
+                                <Input variant="glass" {...field} type="email" placeholder="Enter email address"/>
                             </FormControl>
                             <FormMessage />
                         </FormItem>
@@ -53,7 +59,7 @@ export const SignInCard = () => {
                     <FormField name="password" control={form.control} render={({ field }) => (
                         <FormItem>
                             <FormControl>
-                                <Input {...field} type="password" placeholder="Enter password"/>
+                                <Input variant="glass" {...field} type="password" placeholder="Enter password"/>
                             </FormControl>
                             <FormMessage />
                         </FormItem>
@@ -68,25 +74,25 @@ export const SignInCard = () => {
                 </Form>
             </CardContent>
             <div className="px-4">
-                <Separator />
+                <Separator className="bg-white/30" />
             </div>
             <CardContent className="p-4 flex flex-col gap-2">
-                <Button className="w-full" variant="outline" size="sm" disabled={false}>
+                <Button variant="glass" className="w-full" size="sm">
                     <FcGoogle/>
                     Google
                 </Button>
-                <Button className="w-full" variant="outline" size="sm" disabled={false}>
+                <Button variant="glass" className="w-full" size="sm">
                     <FaGithub/>
                     GitHub
                 </Button>
             </CardContent>
             <div className="px-7">
-                <Separator />
+                <Separator className="bg-white/30" />
             </div>
             <CardContent className="p-7 flex items-center justify-center">
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-gray-800">
                     {"Don't have an account? "}
-                    <Link href="/sign-up" className="ml-1 font-semibold text-amber-400 hover:underline transition-colors">
+                    <Link href="/sign-up" className="ml-1 font-semibold text-purple-800 hover:underline transition-colors">
                         Register
                     </Link>
                 </p>

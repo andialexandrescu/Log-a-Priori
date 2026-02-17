@@ -10,6 +10,9 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Form, FormControl, FormField, FormItem, FormMessage } from "@/components/ui/form";
+import { Chakra_Petch } from 'next/font/google';
+
+const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
 
 const formSchema = z.object({
     username: z.string().trim().min(1, "Required"),
@@ -32,23 +35,23 @@ export const SignUpCard = () => {
     };
 
     return (
-        <Card className="w-full max-w-sm shadow-none">
-            <CardHeader className="flex flex-col items-center justify-center text-center p-4 gap-1">
-                <CardTitle className="text-lg">
+        <Card variant="glass" className="w-full max-w-sm gap-0">
+            <CardHeader className="flex flex-col items-left text-center p-4 gap-1">
+                <CardTitle className={`${chakraPetch.className} text-4xl`}>
                     Register
                 </CardTitle>
-                <CardDescription>
+                <CardDescription className="text-left text-gray-800">
                     By signing up, you agree to our{" "}
                     <Link href="/privacy">
-                        <span className="text-orange-500">Privacy policy</span>
+                        <span className="text-purple-800">Privacy policy</span>
                     </Link>{" and "}
                     <Link href="/terms">
-                        <span className="text-orange-500">Terms of service</span>
+                        <span className="text-purple-800">Terms of service</span>
                     </Link>
                 </CardDescription>
             </CardHeader>
             <div className="px-4">
-                <Separator />
+                <Separator className="bg-white/30"/>
             </div>
             <CardContent className="p-4">
                 <Form {...form}>
@@ -56,7 +59,7 @@ export const SignUpCard = () => {
                     <FormField name="username" control={form.control} render={({ field }) => (
                         <FormItem>
                             <FormControl>
-                                <Input {...field} type="username" placeholder="Enter username"/>
+                                <Input variant="glass" {...field} type="username" placeholder="Enter username"/>
                             </FormControl>
                             <FormMessage />
                         </FormItem>
@@ -64,7 +67,7 @@ export const SignUpCard = () => {
                     <FormField name="email" control={form.control} render={({ field }) => (
                         <FormItem>
                             <FormControl>
-                                <Input {...field} type="email" placeholder="Enter email address"/>
+                                <Input variant="glass" {...field} type="email" placeholder="Enter email address"/>
                             </FormControl>
                             <FormMessage />
                         </FormItem>
@@ -72,7 +75,7 @@ export const SignUpCard = () => {
                     <FormField name="password" control={form.control} render={({ field }) => (
                         <FormItem>
                             <FormControl>
-                                <Input {...field} type="password" placeholder="Enter password"/>
+                                <Input variant="glass" {...field} type="password" placeholder="Enter password"/>
                             </FormControl>
                             <FormMessage />
                         </FormItem>
@@ -87,25 +90,25 @@ export const SignUpCard = () => {
                 </Form>
             </CardContent>
             <div className="px-4">
-                <Separator />
+                <Separator className="bg-white/30"/>
             </div>
             <CardContent className="p-4 flex flex-col gap-2">
-                <Button className="w-full" variant="outline" size="sm" disabled={false}>
+                <Button variant="glass" className="w-full" size="sm" disabled={false}>
                     <FcGoogle/>
                     Google
                 </Button>
-                <Button className="w-full" variant="outline" size="sm" disabled={false}>
+                <Button variant="glass"className="w-full" size="sm" disabled={false}>
                     <FaGithub/>
                     GitHub
                 </Button>
             </CardContent>
             <div className="px-7">
-                <Separator />
+                <Separator className="bg-white/30"/>
             </div>
             <CardContent className="p-7 flex items-center justify-center">
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-gray-800">
                     {"Already have an account? "}
-                    <Link href="/sign-in" className="ml-1 font-semibold text-amber-400 hover:underline transition-colors">
+                    <Link href="/sign-in" className="ml-1 font-semibold text-purple-800 hover:underline transition-colors">
                         Login
                     </Link>
                 </p>
