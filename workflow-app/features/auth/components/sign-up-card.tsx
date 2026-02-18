@@ -11,18 +11,16 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Form, FormControl, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { Chakra_Petch } from 'next/font/google';
+import { registerSchema } from "../schemas";
+import { useRegister } from "../api/use-register";
 
 const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
 
-const formSchema = z.object({
-    username: z.string().trim().min(1, "Required"),
-    email: z.string().trim().email(),
-    password: z.string().trim().min(6, "Minimum of 6 characters"),
-});
-
 export const SignUpCard = () => {
-    const form = useForm<z.infer<typeof formSchema>>({
-        resolver: zodResolver(formSchema),
+    const { mutate } = useRegister();
+
+    const form = useForm<z.infer<typeof registerSchema>>({
+        resolver: zodResolver(registerSchema),
         defaultValues: {
             username: "",
             email: "",
@@ -30,8 +28,8 @@ export const SignUpCard = () => {
         },
     });
 
-    const onSubmit = (values: z.infer<typeof formSchema>) => {
-        console.log({ values });
+    const onSubmit = (values: z.infer<typeof registerSchema>) => {
+        mutate({ json: values });
     };
 
     return (
