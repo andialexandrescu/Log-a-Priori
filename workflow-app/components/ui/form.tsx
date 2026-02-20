@@ -45,22 +45,25 @@ const FormField = <
 const useFormField = () => {
   const fieldContext = React.useContext(FormFieldContext)
   const itemContext = React.useContext(FormItemContext)
+
+  if (!fieldContext?.name) {
+    throw new Error("useFormField should be used within <FormField>")
+  }
+
   const { getFieldState } = useFormContext()
   const formState = useFormState({ name: fieldContext.name })
   const fieldState = getFieldState(fieldContext.name, formState)
 
-  if (!fieldContext) {
-    throw new Error("useFormField should be used within <FormField>")
-  }
-
-  const { id } = itemContext
+  // ssr safe deterministic ids
+  const safeName = String(fieldContext.name).replace(/[.[\]]+/g, "-")
+  const baseId = `form-${safeName}`
 
   return {
-    id,
+    id: itemContext?.id,
     name: fieldContext.name,
-    formItemId: `${id}-form-item`,
-    formDescriptionId: `${id}-form-item-description`,
-    formMessageId: `${id}-form-item-message`,
+    formItemId: `${baseId}-item`,
+    formDescriptionId: `${baseId}-description`,
+    formMessageId: `${baseId}-message`,
     ...fieldState,
   }
 }

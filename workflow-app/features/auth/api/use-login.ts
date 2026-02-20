@@ -10,7 +10,10 @@ export const useLogin = () => {
 
     const mutation = useMutation<ResponseType, Error, RequestType>({
         mutationFn: async ({ json }) => {
-            const response = await client.api.auth.login["$post"]({ json });
+            const response = await client.api.auth.login["$post"](
+                { json },
+                { init: { credentials: "include" } } // important for cookie auth
+            );
 
             return await response.json();
         },
