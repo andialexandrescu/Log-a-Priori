@@ -1,3 +1,5 @@
+"use client";
+
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -13,11 +15,14 @@ import Link from "next/link";
 import { Chakra_Petch } from 'next/font/google';
 import { loginSchema } from "../schemas";
 import { useLogin } from "../api/use-login";
+import { useOAuthLogin } from "../api/use-oauth-login";
 
 const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
 
 export const SignInCard = () => {
-    const { mutate } = useLogin();
+    const { mutate, isPending } = useLogin();
+    const { mutate: githubLogin } = useOAuthLogin('github');
+    const { mutate: googleLogin } = useOAuthLogin('google');
     const form = useForm<z.infer<typeof loginSchema>>({
         resolver: zodResolver(loginSchema),
         defaultValues: {
@@ -27,7 +32,25 @@ export const SignInCard = () => {
     });
 
     const onSubmit = (values: z.infer<typeof loginSchema>) => {
-        mutate({ json: values});
+        mutate(
+            { json: values }
+        );
+    };
+
+    const handleGithubLogin = () => {
+        githubLogin(undefined, {
+            onSuccess: () => {
+                window.location.href = "/";
+            }
+        });
+    };
+
+    const handleGoogleLogin = () => {
+        googleLogin(undefined, {
+            onSuccess: () => {
+                window.location.href = "/";
+            }
+        });
     };
 
     return (
@@ -62,7 +85,7 @@ export const SignInCard = () => {
                             <FormMessage />
                         </FormItem>
                     )} />
-                    <CraftButton className="w-full" size="sm">
+                    <CraftButton disabled={isPending} className="w-full" size="sm">
                         <CraftButtonLabel>Login</CraftButtonLabel>
                         <CraftButtonIcon>
                             <ArrowUpRightIcon className='size-3 stroke-2 transition-transform duration-500 group-hover:rotate-45' />
@@ -75,11 +98,11 @@ export const SignInCard = () => {
                 <Separator className="bg-white/30" />
             </div>
             <CardContent className="p-4 flex flex-col gap-2">
-                <Button variant="glass" className="w-full" size="sm">
+                <Button onClick={handleGoogleLogin} disabled={isPending} variant="glass" className="w-full" size="sm">
                     <FcGoogle/>
                     Google
                 </Button>
-                <Button variant="glass" className="w-full" size="sm">
+                <Button onClick={handleGithubLogin} disabled={isPending} variant="glass" className="w-full" size="sm">
                     <FaGithub/>
                     GitHub
                 </Button>

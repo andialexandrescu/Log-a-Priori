@@ -1,3 +1,5 @@
+"use client";
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -17,7 +19,7 @@ import { useRegister } from "../api/use-register";
 const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
 
 export const SignUpCard = () => {
-    const { mutate } = useRegister();
+    const { mutate, isPending } = useRegister();
 
     const form = useForm<z.infer<typeof registerSchema>>({
         resolver: zodResolver(registerSchema),
@@ -78,8 +80,8 @@ export const SignUpCard = () => {
                             <FormMessage />
                         </FormItem>
                     )} />
-                    <CraftButton className="w-full" size="sm">
-                        <CraftButtonLabel>Login</CraftButtonLabel>
+                    <CraftButton disabled={isPending} className="w-full" size="sm">
+                        <CraftButtonLabel>Register</CraftButtonLabel>
                         <CraftButtonIcon>
                             <ArrowUpRightIcon className='size-3 stroke-2 transition-transform duration-500 group-hover:rotate-45' />
                         </CraftButtonIcon>
@@ -91,11 +93,11 @@ export const SignUpCard = () => {
                 <Separator className="bg-white/30"/>
             </div>
             <CardContent className="p-4 flex flex-col gap-2">
-                <Button variant="glass" className="w-full" size="sm" disabled={false}>
+                <Button disabled={isPending} variant="glass" className="w-full" size="sm">
                     <FcGoogle/>
                     Google
                 </Button>
-                <Button variant="glass"className="w-full" size="sm" disabled={false}>
+                <Button disabled={isPending} variant="glass"className="w-full" size="sm">
                     <FaGithub/>
                     GitHub
                 </Button>
