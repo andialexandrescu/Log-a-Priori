@@ -11,7 +11,7 @@ export type BulkCreateMembersInput = {
     members: RequestType["json"]["members"];
 };
 
-    // receives both a project id and an array of users and their respective roles
+// receives both a project id and an array of users and their respective roles
 export const bulkCreateMembers = async ({ projectId, members }: BulkCreateMembersInput): Promise<SuccessResponseType["data"]> => {
     const response = await client.api.projects[":projectId"]["member"]["bulk"]["$post"]({
         param: { projectId },

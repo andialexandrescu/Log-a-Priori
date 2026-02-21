@@ -20,11 +20,15 @@ import { Badge } from "@/components/ui/badge";
 const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
 
 const steps = ["Details", "Invite for collaboration", "Review"];
+const gridCols = `grid-cols-${steps.length}`;
 
-export const ProjectSetup = () => {
+interface ProjectSetupTabsProps {
+  onSuccess?: (project: any) => void;
+}
+
+export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
   const [currentStep, setCurrentStep] = useState(0);
   const progress = ((currentStep + 1) / steps.length) * 100;
-  const gridCols = `grid-cols-${steps.length}`;
 
   const handlePrevious = () => {
     setCurrentStep(prev => Math.max(prev - 1, 0));
@@ -59,14 +63,17 @@ export const ProjectSetup = () => {
 
   const onSubmit = (values: z.infer<typeof createProjectSchema>) => {
     mutate(
-      {
-        project: values,
-        members: members, // the local state above
+      { 
+        project: values, 
+        members 
       },
       {
         onSuccess: (data) => {
-          console.log("Project created with id:", data.data.id);
+          onSuccess?.(data);
         },
+        onError: (error) => {
+          console.error("Project creation failed:", error);
+        }
       }
     );
   };
@@ -193,4 +200,4 @@ export const ProjectSetup = () => {
   );
 };
 
-export default ProjectSetup;
+export default ProjectSetupTabs;

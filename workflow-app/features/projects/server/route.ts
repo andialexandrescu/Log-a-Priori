@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { sessionMiddleware } from "@/lib/session-middleware";
 import { createProjectSchema, createMemberSchema, bulkCreateMembersSchema } from "../schemas";
+import type { ProjectsResponse, MembersResponse } from "@/pocketbase-types";
 import { z } from "zod";
 
 const app = new Hono()
@@ -73,8 +74,26 @@ const app = new Hono()
         }
 
         return c.json({ data: createdMembers }, 201);
-    });
+    })
+    .get("/", sessionMiddleware, async (c) => {
+        const pb = c.get("pb");
+        const account = c.get("account");
 
+        if (!account) {
+            return c.json({ error: "Unauthorized" }, 401);
+        }
+
+        type MembershipWithExpand = MembersResponse<{ project: ProjectsResponse }>;
+
+        const memberships = await pb.collection('members').getFullList<MembershipWithExpand>({
+            filter: `user = "${account.id}"`,
+            expand: 'project',
+        });
+
+        const projects = memberships.map((membership) => membership.expand?.project);
+
+        return c.json<{ data: ProjectsResponse[] }>({ data: projects });
+    });
 
 
 export default app;
