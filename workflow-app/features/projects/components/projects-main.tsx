@@ -2,10 +2,12 @@
 
 import { Loader } from "lucide-react";
 import { useGetProjects } from "../api/use-get-projects";
+import { useRouter } from "next/navigation";
 
-export const DisplayProjects = () => {
+export const ProjectsMain = () => {
     const { data: projects, isLoading } = useGetProjects();
-    
+    const router = useRouter();
+
     return (
         <main className="flex-1 p-6">
         <div className="flex items-center justify-between mb-6">
@@ -20,17 +22,14 @@ export const DisplayProjects = () => {
 
         {projects && projects.length === 0 && (
           <div className="text-center py-12 text-muted-foreground">
-            No projects yet, create your first project.
+            No projects yet, create your first project
           </div>
         )}
 
         {projects && projects.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {projects.map((project: any) => (
-              <div 
-                key={project.id} 
-                className="border rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow"
-              >
+              <div key={project.id} onClick={() => router.push(`/projects/${project.id}`)} className="border rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow">
                 <h3 className="font-semibold text-lg">{project.name}</h3>
                 <p className="text-sm text-muted-foreground mt-1">
                   {project.description}

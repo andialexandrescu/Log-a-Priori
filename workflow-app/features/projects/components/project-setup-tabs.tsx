@@ -13,9 +13,8 @@ import { z } from "zod";
 import { createProjectSchema } from "../schemas";
 import { useForm } from "react-hook-form";
 import { Chakra_Petch } from 'next/font/google';
-import { ProjectRole, ProjectRoleType } from "../constants";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
+import { CreateMembersBulkSelect } from "./create-members-bulk-select";
+import { ProjectRoleType } from "../constants";
 
 const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
 
@@ -27,6 +26,8 @@ interface ProjectSetupTabsProps {
 }
 
 export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
+  const [members, setMembers] = useState<{ userId: string; role: ProjectRoleType }[]>([]); // collect members locally
+
   const [currentStep, setCurrentStep] = useState(0);
   const progress = ((currentStep + 1) / steps.length) * 100;
 
@@ -36,19 +37,6 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
 
   const handleNext = () => {
     setCurrentStep(Math.min(currentStep + 1, steps.length - 1));
-  };
-
-  // no need to useCreateMember since members will be added before the project is created
-  const [members, setMembers] = useState<{ userId: string; role: ProjectRoleType }[]>([]); // collect members locally
-  const [memberUserId, setMemberUserId] = useState("");
-  const [memberRole, setMemberRole] = useState<ProjectRoleType>(ProjectRole.VIEWER);
-
-  const addMember = () => {
-    if (memberUserId && memberRole) {
-      setMembers([...members, { userId: memberUserId, role: memberRole }]);
-      setMemberUserId(""); // reinit with previous values
-      setMemberRole(ProjectRole.VIEWER);
-    }
   };
 
   const { mutate, isPending } = useCreateProject();
@@ -64,8 +52,8 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
   const onSubmit = (values: z.infer<typeof createProjectSchema>) => {
     mutate(
       { 
-        project: values, 
-        members 
+        project: values,
+        members
       },
       {
         onSuccess: (data) => {
@@ -120,44 +108,7 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
                 )}
 
                 {index === 1 && (
-                  <div className="space-y-4">
-                    <div>
-                      <Label className="block text-sm mb-1">Add project members</Label>
-                      <div className="flex gap-2 items-end mb-4">
-                        <Input placeholder="userId" className="flex-1" value={memberUserId} onChange={(e) => setMemberUserId(e.target.value)}/>
-                        <Select value={memberRole} onValueChange={(value) => setMemberRole(value as ProjectRoleType)}>
-                          <SelectTrigger className="w-32">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={ProjectRole.VIEWER}>viewer</SelectItem>
-                            <SelectItem value={ProjectRole.EDITOR}>editor</SelectItem>
-                            <SelectItem value={ProjectRole.ADMIN}>admin</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Button type="button" onClick={addMember} size="sm" disabled={!memberUserId || !memberRole}>
-                          Add
-                        </Button>
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-2 max-h-40 overflow-y-auto">
-                      {members.length === 0 ? (
-                        <p className="text-muted-foreground text-sm">No members added yet</p>
-                      ) : (
-                        members.map((member, i) => (
-                          <div key={i} className="flex justify-between items-center p-2 border rounded">
-                            <div className="flex items-center gap-2">
-                              <span>{member.userId}</span>
-                              <Badge variant={member.role === ProjectRole.ADMIN ? "destructive" : "secondary"}>
-                                {member.role}
-                              </Badge>
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
+                  <CreateMembersBulkSelect members={members} setMembers={setMembers} />
                 )}
 
                 {index === 2 && (
