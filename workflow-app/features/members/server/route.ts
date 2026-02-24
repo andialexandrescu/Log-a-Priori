@@ -66,6 +66,17 @@ const app = new Hono()
             return c.json({ error: "Forbidden" }, 403);
         }
 
+        const existingMembers = await pb.collection("members").getFullList({
+            filter: `project = "${projectId}"`,
+        }); // this check is meant only after the project is created
+        const existingUserIds = new Set(existingMembers.map((m) => m.user));
+
+        for (const { userId } of members) {
+            if (existingUserIds.has(userId)) {
+                return c.json({ error: `User ${userId} already has a role in this project` }, 400);
+            }
+        }
+
         const createdMembers = [];
         for (const { userId, role } of members) {
             const membership = await pb.collection("members").create({
