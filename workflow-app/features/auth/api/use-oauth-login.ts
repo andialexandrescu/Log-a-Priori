@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import PocketBase from "pocketbase";
+import { toast } from "sonner";
 
 export const useOAuthLogin = (provider: 'github' | 'google') => {
     const mutation = useMutation({
@@ -19,6 +20,9 @@ export const useOAuthLogin = (provider: 'github' | 'google') => {
             });
 
             return authData;
+        },
+        onError: () => {
+            toast.error("Failed to authenticate current user");
         }
     });
 

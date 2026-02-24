@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { InferRequestType, InferResponseType } from "hono";
 import { client } from "@/lib/rpc";
+import { toast } from "sonner";
 
 type ResponseType = InferResponseType<typeof client.api.auth.logout["$post"]>;
 
@@ -15,6 +16,9 @@ export const useLogout = () => {
         onSuccess: () => {
             window.location.href = "/sign-in";
             queryClient.invalidateQueries({ queryKey: ["current"]});
+        },
+        onError: () => {
+            toast.error("Failed to log out current user");
         }
     });
 

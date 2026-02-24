@@ -13,8 +13,8 @@ import { z } from "zod";
 import { createProjectSchema } from "../schemas";
 import { useForm } from "react-hook-form";
 import { Chakra_Petch } from 'next/font/google';
-import { CreateMembersBulkSelect } from "./create-members-bulk-select";
-import { ProjectRoleType } from "../constants";
+import { CreateMembersBulkSelect } from "../../members/components/create-members-bulk-select";
+import { ProjectRoleType } from "../../members/constants";
 
 const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
 

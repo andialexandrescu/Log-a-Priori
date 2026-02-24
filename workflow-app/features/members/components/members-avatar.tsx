@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader, Users } from "lucide-react";
-import { useGetProject } from "../api/use-get-project-by-id";
+import { useGetProject } from "../../projects/api/use-get-project-by-id";
 import { useGetProjectMembers } from "../api/use-get-project-members";
 import { Avatar, AvatarFallback, AvatarImage, AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { useCurrent } from "@/features/auth/api/use-current";

@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { InferRequestType, InferResponseType } from "hono";
 import { client } from "@/lib/rpc";
-import { bulkCreateMembers, BulkCreateMembersInput } from "./use-bulk-create-members";
-import { createProjectSchema } from "../schemas";
+import { bulkCreateMembers, BulkCreateMembersInput } from "../../members/api/use-bulk-create-members";
+import { toast } from "sonner";
 
 type RawResponseType = InferResponseType<typeof client.api.projects["$post"]>;
 type SuccessResponseType = Extract<RawResponseType, { data: any }>; // extract the success branch, the one with a data property
@@ -45,6 +45,9 @@ export const useCreateProject = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["projects"] });
         },
+        onError: () => {
+            toast.error("Failed to create project");
+        }
     });
 
     return mutation;

@@ -1,6 +1,6 @@
 import { ProjectByIdMain } from "@/features/projects/components/project-by-id-main";
-import { MembersAvatar } from "@/features/projects/components/members-avatar";
-import { ProjectCreateMembersDialog } from "@/features/projects/components/project-create-members-dialog";
+import { MembersAvatar } from "@/features/members/components/members-avatar";
+import { ProjectCreateMembersDialog } from "@/features/members/components/project-create-members-dialog";
 
 export default async function ProjectById({ params }: { params: { projectId: string } }) {
     const { projectId } = await params;
