@@ -3,9 +3,9 @@ import { client } from "@/lib/rpc";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-type RawResponseType = InferResponseType<(typeof client.api.members)[":projectId"]["create-bulk"]["$post"]>;
+type RawResponseType = InferResponseType<(typeof client.api.projects)[":projectId"]["members"]["bulk"]["$post"]>;
 type SuccessResponseType = Extract<RawResponseType, { data: any }>; // extract the success branch, the one with a data property
-type RequestType = InferRequestType<(typeof client.api.members)[":projectId"]["create-bulk"]["$post"]>;
+type RequestType = InferRequestType<(typeof client.api.projects)[":projectId"]["members"]["bulk"]["$post"]>;
 
 export type BulkCreateMembersInput = {
     projectId: RequestType["param"]["projectId"];
@@ -14,7 +14,7 @@ export type BulkCreateMembersInput = {
 
 // receives both a project id and an array of users and their respective roles
 export const bulkCreateMembers = async ({ projectId, members }: BulkCreateMembersInput): Promise<SuccessResponseType["data"]> => {
-    const response = await client.api.members[":projectId"]["create-bulk"]["$post"]({
+    const response = await client.api.projects[":projectId"]["members"]["bulk"]["$post"]({
         param: { projectId },
         json: { members },
     });
@@ -36,7 +36,7 @@ export const useBulkCreateMembers = () => {
         onSuccess: (data, variables) => {
             console.log("Created members:", data);
             queryClient.invalidateQueries({ 
-                queryKey: ["members", variables.projectId]
+                queryKey: ["projects", variables.projectId, "members"] 
             });
         },
         onError: () => {

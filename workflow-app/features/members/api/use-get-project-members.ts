@@ -4,11 +4,11 @@ import { toast } from "sonner";
 
 export const useGetProjectMembers = (projectId: string) => {
     const query = useQuery({
-        queryKey: ["members", projectId],
+        queryKey: ["projects", projectId, "members"],
         enabled: !!projectId,
         queryFn: async () => {
             try {
-                const res = await client.api.members[":projectId"].$get({
+                const res = await client.api.projects[":projectId"].members.$get({
                     param: { projectId },
                 });
 

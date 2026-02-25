@@ -4,14 +4,14 @@ import { useState } from "react";
 import { CreateMembersBulkSelect } from "./create-members-bulk-select";
 import { Button } from "@/components/ui/button";
 import { useBulkCreateMembers } from "../api/use-bulk-create-members";
-import { ProjectRoleType } from "../constants"; // adjust the import path
+import { ProjectRoleType } from "../constants";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-interface ProjectSidebarProps {
+interface ProjectProps {
     projectId: string;
 }
 
-export const ProjectCreateMembersDialog = ({ projectId }: ProjectSidebarProps) => {
+export const ProjectCreateMembersDialog = ({ projectId }: ProjectProps) => {
     const [membersToAdd, setMembersToAdd] = useState<{ userId: string; role: ProjectRoleType }[]>([]);
     const { mutateAsync, isPending } = useBulkCreateMembers();
     const [open, setOpen] = useState(false);

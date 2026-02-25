@@ -3,9 +3,9 @@ import { zValidator } from "@hono/zod-validator";
 import { sessionMiddleware } from "@/lib/session-middleware";
 import { createMemberSchema, bulkCreateMembersSchema } from "../schemas";
 
-const app = new Hono()
+const membersApp = new Hono()
     // add a single member
-    // .post("/:projectId/create-member", sessionMiddleware, zValidator("json", createMemberSchema), async (c) => {
+    // .post("/", sessionMiddleware, zValidator("json", createMemberSchema), async (c) => {
     //     const pb = c.get("pb");
     //     const account = c.get("account");
     //     const projectId = c.req.param("projectId");
@@ -28,7 +28,7 @@ const app = new Hono()
 
     //     return c.json({ data: membership }, 201);
     // })
-    .get("/:projectId", sessionMiddleware, async (c) => {
+    .get("/", sessionMiddleware, async (c) => {
         const pb = c.get("pb");
         const account = c.get("account");
         const projectId = c.req.param("projectId");
@@ -51,7 +51,7 @@ const app = new Hono()
         return c.json({ data: members });
     })
     // bulk add members
-    .post("/:projectId/create-bulk", sessionMiddleware, zValidator("json", bulkCreateMembersSchema), async (c) => {
+    .post("/bulk", sessionMiddleware, zValidator("json", bulkCreateMembersSchema), async (c) => {
         const pb = c.get("pb");
         const account = c.get("account");
         const projectId = c.req.param("projectId");
@@ -60,6 +60,11 @@ const app = new Hono()
         if (!account) {
             return c.json({ error: "Unauthorized" }, 401);
         }
+
+        if (!projectId) {
+            return c.json({ error: "Project is required" }, 400);
+        }
+
 
         const project = await pb.collection("projects").getOne(projectId);
         if (project.owner !== account.id) {
@@ -88,6 +93,21 @@ const app = new Hono()
         }
 
         return c.json({ data: createdMembers }, 201);
+    })
+    .get("/current", sessionMiddleware, async (c) => {
+        const pb = c.get("pb");
+        const account = c.get("account");
+        const projectId = c.req.param("projectId");
+
+        if (!account) {
+            return c.json({ error: "Unauthorized" }, 401);
+        }
+
+        const member = await pb.collection("members").getFirstListItem(
+            `project = "${projectId}" && user = "${account.id}"`
+        );
+
+        return c.json({ data: member });
     });
 
-export default app;
+export default membersApp;
