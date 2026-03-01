@@ -6,7 +6,7 @@ export const createCredentialsSchema = z.object({
         token: z.string().min(1, "GitHub token is required"),
         owner: z.string().min(1, "Repository owner is required"),
         repo: z.string().min(1, "Repository name is required"),
-        webhookSecret: z.string().min(1, "Webhook secret is required"),
+        // webhook is removed since it is generated server side
     }),
     api_limitations: z.record(z.string(), z.unknown()).optional(), // json limitations not yet known
     // no need to set the project id or member id, since they are part of the endpoint
