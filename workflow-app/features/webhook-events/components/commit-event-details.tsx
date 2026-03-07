@@ -8,6 +8,15 @@ export function CommitEventDetails({ payload, repository }: { payload: any; repo
     const dateValue = commitData?.author?.date || payload?.author_date;
     const branch = payload?.branch || "Unknown";
     const pusher = payload?.pusher || commitData?.author?.name || payload?.author_name || "Unknown";
+    const senderLogin =
+        payload?.sender_login ||
+        payload?.sender?.login ||
+        payload?.author?.login ||
+        payload?.committer?.login ||
+        commitData?.author?.name ||
+        payload?.author_name ||
+        "Unknown";
+    const isWebFlowPush = String(pusher).toLowerCase() === "web-flow";
 
     const parentSha = payload.parents?.[0]?.sha;
     const compareUrl = parentSha
@@ -31,7 +40,14 @@ export function CommitEventDetails({ payload, repository }: { payload: any; repo
         <div className="p-6 space-y-4">
             <div className="grid grid-cols-3 gap-4 text-sm mb-4 p-3 bg-muted/50 rounded-lg">
                 <div><span className="font-medium">Branch:</span> {branch}</div>
-                <div><span className="font-medium">Pusher:</span> {pusher}</div>
+                <div>
+                    <span className="font-medium">Pusher:</span> {isWebFlowPush ? "web-flow (GitHub web UI)" : pusher}
+                    {isWebFlowPush && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                            Action performed in GitHub browser by contributor: {senderLogin}
+                        </div>
+                    )}
+                </div>
                 <div className="text-right">
                     <a href={compareUrl} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600 font-medium flex items-center justify-end gap-1 text-sm">
                         View Compare <FileText className="w-3 h-3" />

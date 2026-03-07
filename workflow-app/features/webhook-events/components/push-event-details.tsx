@@ -5,12 +5,21 @@ export function PushEventDetails({ payload }: { payload: any }) {
     const commits = Array.isArray(payload?.commits) ? payload.commits : [];
     const branch = payload?.ref ? payload.ref.replace("refs/heads/", "") : "Unknown";
     const pusher = payload?.pusher?.name || payload?.sender?.login || "Unknown";
+    const senderLogin = payload?.sender?.login || payload?.head_commit?.author?.username || payload?.head_commit?.author?.name || "Unknown";
+    const isWebFlowPush = String(pusher).toLowerCase() === "web-flow";
 
     return (
         <div className="p-6 space-y-4">
             <div className="grid grid-cols-3 gap-4 text-sm mb-4 p-3 bg-muted/50 rounded-lg">
                 <div><span className="font-medium">Branch:</span> {branch}</div>
-                <div><span className="font-medium">Pusher:</span> {pusher}</div>
+                <div>
+                    <span className="font-medium">Pusher:</span> {isWebFlowPush ? "web-flow (GitHub web UI)" : pusher}
+                    {isWebFlowPush && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                            Action performed in GitHub browser by contributor: {senderLogin}
+                        </div>
+                    )}
+                </div>
                 <div className="text-right">
                     <a href={payload.compare} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600 font-medium flex items-center justify-end gap-1 text-sm">
                         View Compare <FileText className="w-3 h-3" />

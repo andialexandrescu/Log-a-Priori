@@ -73,6 +73,7 @@ const webhookEventsApp = new Hono()
                         sha: commit.id,
                         branch: data?.ref ? String(data.ref).replace("refs/heads/", "") : "Unknown",
                         pusher: data?.pusher?.name || data?.sender?.login,
+                        sender_login: data?.sender?.login || commit?.author?.username || commit?.author?.name,
                         compare: data?.compare,
                     };
 
