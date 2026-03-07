@@ -59,14 +59,8 @@ const webhookEventsApp = new Hono()
         const projectId = c.req.param("projectId");
         const memberId = c.req.param("memberId");
         try {
-            const record = await pb.collection("webhook_events").create({ // the webhook event itself
-                member: memberId,
-                event_type: event,
-                repository: repo,
-                payload: data,
-            });
-
-            if (event === "push" && Array.isArray(data.commits)) { // if it's a push event, also create separate events for each commit
+            if (event === "push" && Array.isArray(data.commits)) {
+                // push payloads are normalized into commit records only to avoid duplicate push+commit entries as part of a previous commit bug
                 for (const commit of data.commits) {
                     const normalizedCommitPayload = {
                         ...commit,
@@ -80,7 +74,8 @@ const webhookEventsApp = new Hono()
                     const existing = await pb.collection("webhook_events").getList(1, 1, {
                         filter: `member="${memberId}" && repository="${repo}" && event_type="commit" && payload.sha="${commit.id}"`,
                     });
-                    if (existing.totalItems === 0) { //  if this commit doesn't already exist for this member and repo add it to webhook_events
+
+                    if (existing.totalItems === 0) {
                         await pb.collection("webhook_events").create({
                             member: memberId,
                             event_type: "commit",
@@ -93,7 +88,17 @@ const webhookEventsApp = new Hono()
                         });
                     }
                 }
+
+                return c.json({ success: true, normalized: "push_to_commit" }, 201);
             }
+
+            const record = await pb.collection("webhook_events").create({
+                member: memberId,
+                event_type: event,
+                repository: repo,
+                payload: data,
+            });
+
             return c.json({ success: true, id: record.id }, 201);
         } catch (error) {
             console.error("Failed to store webhook event:", error);

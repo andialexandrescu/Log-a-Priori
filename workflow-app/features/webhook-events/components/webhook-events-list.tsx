@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { formatDistanceToNow } from "date-fns";
 import { useGetMemberWebhookEvents } from "../api/use-get-member-webhook-events";
 import { cn } from "@/lib/utils";
-import { PushEventDetails } from "./push-event-details";
 import { CommitEventDetails } from "./commit-event-details";
 import { fetchGetCommits } from "../../commits/api/use-get-commits";
 import { toast } from "sonner";
@@ -78,27 +77,12 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
         return <div>No webhook events yet</div>;
     }
 
-    const getEventGithubTimestamp = (event: any) => { // sort github webhook events based on the date they were pushed on the repo, including both push and commit event_type entries in webhook_events
+    const getEventGithubTimestamp = (event: any) => {
         if (event?.event_type === "commit") {
             return Date.parse(event?.payload?.commit?.author?.date || event?.payload?.author?.date || event?.payload?.timestamp || "") || 0;
         }
 
-        if (event?.event_type === "push") {
-            const headCommitTs = Date.parse(event?.payload?.head_commit?.timestamp || "") || 0;
-            if (headCommitTs) {
-                return headCommitTs;
-            }
-
-            const commitTimestamps = Array.isArray(event?.payload?.commits)
-                ? event.payload.commits
-                    .map((commit: any) => Date.parse(commit?.timestamp || "") || 0)
-                    .filter(Boolean)
-                : [];
-
-            return commitTimestamps.length > 0 ? Math.max(...commitTimestamps) : 0;
-        }
-
-        return 0;
+        return Date.parse(event?.created || "") || 0;
     };
 
     const sortedEvents = [...events].sort((a, b) => getEventGithubTimestamp(b) - getEventGithubTimestamp(a));
@@ -142,18 +126,12 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
 
                 const backfill = result.backfill as {
                     fetchedFromGithub?: number;
-                    skippedExistingOrPush?: number;
-                    deletedAsPushDuplicates?: number;
+                    skippedExisting?: number;
                 } | undefined;
                 const fetched = backfill?.fetchedFromGithub ?? 0;
-                const skippedExistingOrPush = backfill?.skippedExistingOrPush ?? 0;
-                const deletedAsPushDuplicates = backfill?.deletedAsPushDuplicates ?? 0;
+                const skippedExisting = backfill?.skippedExisting ?? 0;
                 nextSyncSummary.push(
-                    `Current 'update commit' backfill action: fetched ${fetched} commits (skipped existing commits/push: ${skippedExistingOrPush})${
-                        deletedAsPushDuplicates > 0
-                            ? ` (deleted push-duplicate commit events: ${deletedAsPushDuplicates})`
-                            : ""
-                    }`
+                    `Current 'update commit' backfill action: fetched ${fetched} commits (skipped existing commits: ${skippedExisting})`
                 );
             }
 
@@ -192,7 +170,7 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
                     <CardHeader className="pb-2">
                         <div className="flex items-center justify-between w-full">
                             <div className="flex items-center gap-2">
-                                <Badge variant={event.event_type === "push" ? "default" : "secondary"}>
+                                <Badge variant="secondary">
                                     {event.event_type}
                                 </Badge>
                                 <span className="text-sm text-muted-foreground">
@@ -213,9 +191,7 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
                     </CardHeader>
                     <div className={getEventDetailsClassName(event.id)}>
                         <CardContent className="p-0 pt-6 pb-6">
-                            {event.event_type === "push" ? (
-                                <PushEventDetails payload={event.payload} />
-                            ) : event.event_type === "commit" ? (
+                            {event.event_type === "commit" ? (
                                 <CommitEventDetails payload={event.payload} repository={event.repository} />
                             ) : (
                                 <pre className="text-xs bg-muted p-4 rounded overflow-auto">

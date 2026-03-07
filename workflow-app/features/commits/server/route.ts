@@ -4,25 +4,6 @@ import { zValidator } from "@hono/zod-validator";
 import { getCommitsQuerySchema } from "../schemas";
 import { enrichCommitWithDetails, getNextLinkUrl, githubHeaders, type GithubCommitSummary } from "./github-commits-utils";
 
-const getPushPayloadShas = (payload: any) => { // during refresh commits backfill the sha extraction aims to help in filtering out existing stored push/ commit (event_type) payloads
-    const shas: string[] = [];
-
-    if (payload?.head_commit?.id) {
-        shas.push(payload.head_commit.id);
-    }
-
-    if (Array.isArray(payload?.commits)) {
-        for (const commit of payload.commits) {
-            const sha = commit?.id || commit?.sha;
-            if (sha) {
-                shas.push(sha);
-            }
-        }
-    }
-
-    return shas;
-};
-
 const mapCommitPayload = (payload: any) => ({
     sha: payload?.sha,
     message: payload?.commit?.message,
@@ -74,27 +55,6 @@ const commitsApp = new Hono()
             fields: "id,payload",
         });
 
-        const pushEvents = await pb.collection("webhook_events").getFullList({
-            filter: `member="${memberId}" && repository="${repo}" && event_type="push"`,
-            fields: "payload",
-        });
-
-        const pushShas = new Set<string>();
-        for (const pushEvent of pushEvents as any[]) {
-            for (const sha of getPushPayloadShas(pushEvent?.payload)) {
-                pushShas.add(sha);
-            }
-        }
-
-        let deletedAsPushDuplicates = 0;
-        for (const commitEvent of existingCommitEvents as any[]) {
-            const existingSha = commitEvent?.payload?.sha;
-            if (existingSha && pushShas.has(existingSha)) {
-                await pb.collection("webhook_events").delete(commitEvent.id); // cleanup historical duplicates from older behavior: commit events whose sha already exists in push payloads
-                deletedAsPushDuplicates += 1;
-            }
-        }
-
         const existingEvents = await pb.collection("webhook_events").getFullList({
             filter: `member="${memberId}" && repository="${repo}" && event_type="commit"`,
             fields: "id,payload",
@@ -112,9 +72,9 @@ const commitsApp = new Hono()
         let pagesFetched = 0;
         let nextUrl: string | null = `https://api.github.com/repos/${repo}/commits?per_page=${githubPageSize}&page=1`;
         const githubCommits: GithubCommitSummary[] = [];
-        let skippedExistingOrPushCount = 0;
+        let skippedExistingCount = 0;
 
-        const knownShas = new Set<string>([...pushShas, ...existingBySha.keys()]);
+        const knownShas = new Set<string>(existingBySha.keys());
 
         while (nextUrl) {
             const githubRes = await fetch(nextUrl, {
@@ -141,7 +101,7 @@ const commitsApp = new Hono()
                 const commitSha = commitSummary?.sha;
                 return !!commitSha && knownShas.has(commitSha);
             }).length;
-            skippedExistingOrPushCount += skippedInPage;
+            skippedExistingCount += skippedInPage;
 
             const missingCommitsInPage = commitsPage.filter((commitSummary: GithubCommitSummary) => {
                 const commitSha = commitSummary?.sha;
@@ -200,8 +160,7 @@ const commitsApp = new Hono()
                 fetchedFromGithub: githubCommits.length,
                 created: createdCount,
                 updated: 0,
-                skippedExistingOrPush: skippedExistingOrPushCount,
-                deletedAsPushDuplicates,
+                skippedExisting: skippedExistingCount,
                 pagesFetched,
             },
         });

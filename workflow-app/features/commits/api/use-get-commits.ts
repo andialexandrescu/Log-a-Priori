@@ -22,8 +22,7 @@ export type GetCommitsResult = {
     total?: number;
     backfill?: {
         fetchedFromGithub?: number;
-        skippedExistingOrPush?: number;
-        deletedAsPushDuplicates?: number;
+        skippedExisting?: number;
         pagesFetched?: number;
         created?: number;
         updated?: number;
