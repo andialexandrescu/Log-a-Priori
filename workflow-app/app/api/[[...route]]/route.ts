@@ -5,6 +5,7 @@ import projects from "@/features/projects/server/route";
 import membersApp from "@/features/members/server/route";
 import credentialsApp from "@/features/credentials/server/route";
 import webhookEventsApp from "@/features/webhook-events/server/route";
+import commitsApp from "@/features/commits/server/route";
 
 const app = new Hono().basePath("/api");
 
@@ -13,8 +14,9 @@ const routes = app
     .route("/projects", projects)
     .route("/projects/:projectId/members", membersApp)
     .route("/projects/:projectId/members/:memberId/credentials", credentialsApp)
-    .route("/projects/:projectId/members/:memberId/webhook-events", webhookEventsApp);
-
+    .route("/projects/:projectId/members/:memberId/webhook-events", webhookEventsApp)
+    .route("/projects/:projectId/members/:memberId/commits", commitsApp);
+    
 export const GET = handle(app);
 export const POST = handle(app);
 export const PATCH = handle(app);

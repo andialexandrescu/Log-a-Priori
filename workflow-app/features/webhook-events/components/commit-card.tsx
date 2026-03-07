@@ -9,7 +9,7 @@ interface CommitCardProps {
     removedCount: number;
 }
 
-export function CommitCard({ shortId, message, timeLabel, addedCount, modifiedCount, removedCount }: CommitCardProps) {
+export function CommitCard({ shortId, message, timeLabel, addedCount, modifiedCount, removedCount}: CommitCardProps) {
     return (
         <div className="group border border-border hover:border-ring rounded-lg p-3 hover:shadow-md transition-all bg-card/50 hover:bg-card h-full flex flex-col">
             <div className="flex items-start justify-between mb-2">
@@ -30,15 +30,9 @@ export function CommitCard({ shortId, message, timeLabel, addedCount, modifiedCo
             </div>
 
             <div className="flex items-center gap-4 text-xs mt-auto pt-2 border-t border-border/50">
-                {addedCount > 0 && (
-                    <FileChangeBadge type="added" count={addedCount} />
-                )}
-                {modifiedCount > 0 && (
-                    <FileChangeBadge type="modified" count={modifiedCount} />
-                )}
-                {removedCount > 0 && (
-                    <FileChangeBadge type="removed" count={removedCount} />
-                )}
+                <FileChangeBadge type="added" count={addedCount} />
+                <FileChangeBadge type="modified" count={modifiedCount} />
+                <FileChangeBadge type="removed" count={removedCount} />
             </div>
         </div>
     );

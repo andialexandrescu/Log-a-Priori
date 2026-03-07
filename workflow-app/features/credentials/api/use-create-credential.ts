@@ -32,10 +32,10 @@ export const useCreateCredential = () => {
 
             return result;
         },
-        onSuccess: (data) => {
-            // queryClient.invalidateQueries({
-            //     queryKey: 
-            // });
+        onSuccess: async (_data, variables) => {
+            await queryClient.invalidateQueries({
+                queryKey: ["projects", variables.projectId, "members", variables.memberId, "webhook-events"],
+            });
             toast.success("Credential created successfully");
         },
         onError: () => {

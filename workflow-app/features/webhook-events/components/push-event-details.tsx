@@ -2,10 +2,10 @@ import { GitCommit, FileText } from "lucide-react";
 import { CommitCard } from "./commit-card";
 
 export function PushEventDetails({ payload }: { payload: any }) {
-    const commits = payload.commits;
-    const branch = payload.ref.replace("refs/heads/", "");
-    const pusher = payload.pusher.name;
-    
+    const commits = Array.isArray(payload?.commits) ? payload.commits : [];
+    const branch = payload?.ref ? payload.ref.replace("refs/heads/", "") : "Unknown";
+    const pusher = payload?.pusher?.name || payload?.sender?.login || "Unknown";
+
     return (
         <div className="p-6 space-y-4">
             <div className="grid grid-cols-3 gap-4 text-sm mb-4 p-3 bg-muted/50 rounded-lg">
@@ -27,8 +27,7 @@ export function PushEventDetails({ payload }: { payload: any }) {
                 <div className="grid grid-cols-1 gap-3">
                     {commits.map((commit: any, idx: number) => {
                         return (
-                            <CommitCard key={idx} shortId={commit.id} message={commit.message} timeLabel={new Date(commit.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} addedCount={commit.added?.length ?? 0} modifiedCount={commit.modified?.length ?? 0} removedCount={commit.removed?.length ?? 0}
-                            />
+                            <CommitCard key={idx} shortId={commit.id} message={commit.message} timeLabel={new Date(commit.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} addedCount={commit.added?.length ?? 0} modifiedCount={commit.modified?.length ?? 0} removedCount={commit.removed?.length ?? 0}/>
                         );
                     })}
                 </div>

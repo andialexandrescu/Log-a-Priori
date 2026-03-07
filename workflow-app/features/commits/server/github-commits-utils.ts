@@ -1,0 +1,240 @@
+export const githubHeaders = (token: string) => ({ 
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github.v3+json",
+});
+
+export const getNextLinkUrl = (linkHeader: string | null) => {
+    if (!linkHeader) {
+        return null;
+    }
+
+    const links = linkHeader.split(",").map((part) => part.trim());
+    for (const link of links) {
+        const match = link.match(/<([^>]+)>;\s*rel="([^"]+)"/);
+        if (match && match[2] === "next") {
+            return match[1];
+        }
+    }
+
+    return null;
+};
+
+export type GithubErrorPayload = {
+    message?: string;
+    documentation_url?: string;
+    status?: string;
+};
+
+export const parseGithubErrorPayload = async (response: Response): Promise<GithubErrorPayload> => {
+    try {
+        const payload = await response.json();
+        if (payload && typeof payload === "object") {
+            return payload as GithubErrorPayload;
+        }
+    } catch {
+    }
+
+    try {
+        const text = await response.text();
+        return { message: text || undefined, status: String(response.status) };
+    } catch {
+        return { status: String(response.status) };
+    }
+};
+
+export const mapGithubApiError = (responseStatus: number, payload: GithubErrorPayload) => {
+    if (responseStatus === 401) {
+        return { status: 401, message: "Invalid GitHub token" };
+    }
+
+    if (responseStatus === 404) {
+        return {
+            status: 404,
+            message: "Repository not found or you do not have permission to configure webhooks or access this repository",
+        };
+    }
+
+    return {
+        status: 500,
+        message: payload.message || "GitHub api request failed",
+    };
+};
+
+export type GithubCommitFile = {
+    status?: string;
+    filename?: string;
+};
+
+export type GithubCommitSummary = {
+    sha?: string;
+    files?: GithubCommitFile[];
+    author?: {
+        login?: string;
+    };
+    committer?: {
+        login?: string;
+    };
+    commit?: {
+        author?: {
+            name?: string;
+        };
+        committer?: {
+            name?: string;
+        };
+    };
+    [key: string]: unknown;
+};
+
+export type EnrichedCommitPayload = GithubCommitSummary & {
+    branch: string;
+    added: string[];
+    modified: string[];
+    removed: string[];
+};
+
+type EnrichAndStoreInitialCommitsInput = {
+    pb: any;
+    memberId: string;
+    repository: string;
+    token: string;
+};
+
+export type InitialBackfillResult = {
+    fetchedFromGithub: number;
+    created: number;
+};
+
+type EnrichCommitWithDetailsInput = {
+    owner: string;
+    repoName: string;
+    sha: string;
+    summary: GithubCommitSummary;
+    token: string;
+    defaultBranch?: string;
+};
+
+const getFileChangeArrays = (payload: GithubCommitSummary) => {
+    const files = Array.isArray(payload?.files) ? payload.files : [];
+
+    const added = files.filter((file) => file?.status === "added").map((file) => file?.filename).filter(Boolean);
+
+    const modified = files.filter((file) => file?.status === "modified").map((file) => file?.filename).filter(Boolean);
+
+    const removed = files.filter((file) => file?.status === "removed").map((file) => file?.filename).filter(Boolean);
+
+    return {
+        added: added as string[],
+        modified: modified as string[],
+        removed: removed as string[],
+    };
+};
+
+const getPusherName = (payload: GithubCommitSummary) => {
+    return (
+        payload?.committer?.login ||
+        payload?.author?.login ||
+        payload?.commit?.committer?.name ||
+        payload?.commit?.author?.name ||
+        "Unknown"
+    );
+};
+
+// per commit helper
+export const enrichCommitWithDetails = async ({ owner, repoName, sha, summary, token, defaultBranch }: EnrichCommitWithDetailsInput): Promise<EnrichedCommitPayload> => {
+    let detailedCommit: GithubCommitSummary = summary;
+    try {
+        const detailRes = await fetch(
+            `https://api.github.com/repos/${owner}/${repoName}/commits/${sha}`,
+            { headers: githubHeaders(token) }
+        );
+        if (detailRes.ok) {
+            const detailPayload: unknown = await detailRes.json();
+            if (detailPayload && typeof detailPayload === "object") {
+                detailedCommit = detailPayload as GithubCommitSummary;
+            }
+        }
+    } catch {
+        detailedCommit = summary;
+    }
+
+    const { added, modified, removed } = getFileChangeArrays(detailedCommit);
+    const pusher = getPusherName(detailedCommit);
+
+    return {
+        ...detailedCommit,
+        branch: defaultBranch || "Unknown",
+        pusher,
+        added,
+        modified,
+        removed,
+    };
+};
+
+// the backfill orchestrator calling enrichCommitWithDetails for each GithubCommitSummary
+export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, token }: EnrichAndStoreInitialCommitsInput): Promise<InitialBackfillResult> => {
+    const [owner, repoName] = repository.split("/");
+
+    const githubCommits: GithubCommitSummary[] = [];
+
+    let defaultBranch = "unknown";
+    try {
+        const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}`, {
+            headers: githubHeaders(token),
+        });
+        if (repoRes.ok) {
+            const repoData = await repoRes.json();
+            defaultBranch = repoData?.default_branch || defaultBranch;
+        }
+    } catch {
+        defaultBranch = "unknown";
+    }
+
+    let nextUrl: string | null = `https://api.github.com/repos/${owner}/${repoName}/commits?per_page=100&page=1`;
+    while (nextUrl) {
+        const commitsRes = await fetch(nextUrl, { headers: githubHeaders(token) });
+
+        if (!commitsRes.ok) {
+            throw new Error(`Initial 'create credential' commit backfill failed: ${commitsRes.status}`);
+        }
+
+        const commitsPage: unknown = await commitsRes.json();
+        if (!Array.isArray(commitsPage) || commitsPage.length === 0) {
+            break;
+        }
+
+        githubCommits.push(...(commitsPage as GithubCommitSummary[])); // initial credential backfill loads all previous commits
+        nextUrl = getNextLinkUrl(commitsRes.headers.get("link"));
+    }
+
+    let createdCount = 0;
+
+    for (const commitSummary of githubCommits) {
+        const sha = commitSummary?.sha;
+        if (!sha) {
+            continue;
+        }
+
+        const normalizedCommit = await enrichCommitWithDetails({
+            owner,
+            repoName,
+            sha,
+            summary: commitSummary,
+            token,
+            defaultBranch,
+        });
+
+        // on initial credential creation the webhook_events table is empty for that member+repository combination, so there's no possibility of existing records to update
+        await pb.collection("webhook_events").create({
+            member: memberId,
+            event_type: "commit",
+            repository,
+            payload: normalizedCommit,
+        });
+        createdCount += 1;
+    }
+
+    return {
+        fetchedFromGithub: githubCommits.length,
+        created: createdCount,
+    };
+};

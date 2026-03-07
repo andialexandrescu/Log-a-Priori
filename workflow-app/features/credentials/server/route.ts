@@ -3,6 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { randomBytes } from "crypto";
 import { sessionMiddleware } from "@/lib/session-middleware";
 import { createCredentialsSchema } from "../schemas";
+import { enrichAndStoreInitialCommits, githubHeaders, mapGithubApiError, parseGithubErrorPayload, type InitialBackfillResult } from "../../commits/server/github-commits-utils";
 
 const credentialsApp = new Hono()
     .post("/", sessionMiddleware, zValidator("json", createCredentialsSchema), async (c) => {
@@ -38,6 +39,26 @@ const credentialsApp = new Hono()
 
             const { token, owner, repo } = data.api_keys;
             const webhookUrl = process.env.AZURE_FUNCTION_URL;
+            const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+                headers: githubHeaders(token),
+            });
+            if (!repoRes.ok) {
+                const payload = await parseGithubErrorPayload(repoRes);
+                const mapped = mapGithubApiError(repoRes.status, payload);
+                await pb.collection("credentials").delete(credentials.id);
+                return c.json(
+                    {
+                        error: mapped.message,
+                        github: {
+                            status: repoRes.status,
+                            message: payload.message,
+                            documentation_url: payload.documentation_url,
+                        },
+                    },
+                    mapped.status as 401 | 404 | 500
+                );
+            }
+
             const githubRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/hooks`, { // creates the webhook on github using the user's token and the generated secret
                 method: 'POST',
                 headers: {
@@ -59,16 +80,43 @@ const credentialsApp = new Hono()
             });
 
             if (!githubRes.ok) { // if the creation fails, the credential should be deleted
-                const errorText = await githubRes.text();
-                console.error('GitHub webhook creation failed:', errorText);
+                const payload = await parseGithubErrorPayload(githubRes);
+                const mapped = mapGithubApiError(githubRes.status, payload);
+                console.error('GitHub webhook creation failed:', payload);
                 await pb.collection("credentials").delete(credentials.id);
-                return c.json({ error: "Failed to create GitHub webhook: " + errorText }, 500);
+                return c.json(
+                    {
+                        error: mapped.message,
+                        github: {
+                            status: githubRes.status,
+                            message: payload.message,
+                            documentation_url: payload.documentation_url,
+                        },
+                    },
+                    mapped.status as 401 | 404 | 500
+                );
             }
 
             const webhookData = await githubRes.json();
             console.log('GitHub webhook created:', webhookData.id);
 
-            return c.json({ data: credentials }, 201);
+            const projectId = member.expand?.project?.id; // still needed for member verification
+            let initialBackfill: InitialBackfillResult | null = null;
+
+            if (projectId) {
+                try {
+                    initialBackfill = await enrichAndStoreInitialCommits({
+                        pb,
+                        memberId,
+                        repository: `${owner}/${repo}`,
+                        token,
+                    });
+                } catch (backfillError) {
+                    console.error("Initial commit enrichment failed:", backfillError);
+                }
+            }
+
+            return c.json({ data: credentials, initialBackfill }, 201);
         } catch (error) {
             console.error("Failed to create credential:", error);
             return c.json({ error: "Failed to create credential" }, 500);

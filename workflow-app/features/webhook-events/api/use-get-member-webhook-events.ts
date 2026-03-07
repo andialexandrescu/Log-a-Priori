@@ -6,6 +6,8 @@ export const useGetMemberWebhookEvents = (projectId: string, memberId: string) =
     const query = useQuery({
         queryKey: ["projects", projectId, "members", memberId, "webhook-events"],
         enabled: !!projectId && !!memberId,
+        refetchInterval: 5000, // calls the webhook-events endpoint every 5 seconds, in order to make webhook events appear without manual refresh (issue arose in inital 'create credential' commits backfill)
+        refetchIntervalInBackground: true,
         queryFn: async () => {
             try {
                 const res = await client.api.projects[":projectId"].members[":memberId"]["webhook-events"].$get({

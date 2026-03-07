@@ -45,7 +45,24 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId}
             { projectId, memberId, ...values },
             {
                 onSuccess: (data) => {
-                    setCreatedCredential(data.data); // { data: credentials } including webhook generated secret
+                    if (typeof window !== "undefined" && data.initialBackfill) { // checking if using sessionStorage and window is possible, since they only exist in the browser (might need to change after switching to desktop version)
+                        // if initialBackfill exists it means credential creation also did an initial commit fetch
+                        const backfillNotice = {
+                            projectId,
+                            memberId,
+                            fetchedFromGithub: data.initialBackfill.fetchedFromGithub,
+                        };
+
+                        sessionStorage.setItem(
+                            "credentialBackfillNotice",
+                            JSON.stringify(backfillNotice)
+                        );
+
+                        window.dispatchEvent( // in page event telling that the new backfill notice is ready
+                            new CustomEvent("credential-backfill-notice", { detail: backfillNotice })
+                        );
+                    }
+                    setCreatedCredential(data); // includes credential + initialBackfill summary
                     // onOpenChange(false); moved these to handleOpenChange
                     // form.reset();
                 }
@@ -69,7 +86,7 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId}
 
     const handleCopySecret = () => {
         if (!createdCredential) return;
-        const secret = createdCredential.api_keys?.webhookSecret;
+        const secret = createdCredential.data?.api_keys?.webhookSecret;
         if (secret) {
             navigator.clipboard.writeText(secret);
             setCopied(true);
@@ -90,6 +107,12 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId}
                 {!createdCredential ? (
                     <Form {...form}>
                         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3">
+                            {createCredential.isError && (
+                                <p className="text-sm text-red-500">
+                                    {createCredential.error?.message || "Failed to create credential"}
+                                </p>
+                            )}
+
                             <FormField name="name" control={form.control} render={({ field }) => (
                                     <FormItem>
                                         <FormControl>
@@ -147,7 +170,7 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId}
                         </p>
                         <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
                             <code className="flex-1 font-mono text-sm break-all">
-                                {createdCredential.api_keys?.webhookSecret}
+                                {createdCredential.data?.api_keys?.webhookSecret}
                             </code>
                             <Button size="icon" variant="ghost" onClick={handleCopySecret}>
                                 {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
