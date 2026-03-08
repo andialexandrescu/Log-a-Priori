@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -103,7 +103,7 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
                 : "max-h-0 opacity-0 -mt-4"
         );
 
-    const refreshCommits = async () => {
+    const refreshCommits = useCallback(async (options?: { silent?: boolean; auto?: boolean }) => {
         if (!events || events.length === 0) {
             return;
         }
@@ -113,7 +113,9 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
         );
 
         if (repositories.length === 0) {
-            toast.error("No repository found to refresh commits");
+            if (!options?.silent) {
+                toast.error("No repository found to refresh commits");
+            }
             return;
         }
 
@@ -131,21 +133,43 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
                 const fetched = backfill?.fetchedFromGithub ?? 0;
                 const skippedExisting = backfill?.skippedExisting ?? 0;
                 nextSyncSummary.push(
-                    `Current 'update commit' backfill action: fetched ${fetched} commits (skipped existing commits: ${skippedExisting})`
+                    `${options?.auto ? "Auto" : "Current 'update commit'"} backfill action: fetched ${fetched} commits (skipped existing commits: ${skippedExisting})`
                 );
             }
 
             setSyncSummary(nextSyncSummary);
             await queryClient.invalidateQueries({
-                queryKey: ["projects", projectId, "members", memberId, "webhook-events"],
+                queryKey: ["projects", projectId, "members", memberId, "commits"],
             });
-            toast.success("Commits refreshed");
+            if (!options?.silent) {
+                toast.success("Commits refreshed");
+            }
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Failed to refresh commits");
+            if (!options?.silent) {
+                toast.error(error instanceof Error ? error.message : "Failed to refresh commits");
+            }
         } finally {
             setIsRefreshingCommits(false);
         }
-    };
+    }, [events, memberId, projectId, queryClient]);
+
+    useEffect(() => {
+        if (!events || events.length === 0) {
+            return;
+        }
+
+        const intervalId = window.setInterval(() => {
+            if (isRefreshingCommits) {
+                return;
+            }
+
+            void refreshCommits({ silent: true, auto: true });
+        }, 15000);
+
+        return () => {
+            window.clearInterval(intervalId);
+        };
+    }, [events, isRefreshingCommits, refreshCommits]);
 
     return (
         <div className="space-y-4">
@@ -154,9 +178,12 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
                     <h2 className="text-2xl font-bold">Recent webhook events</h2>
                     <Badge variant="outline">{events.length}</Badge>
                 </div>
-                <Button variant="outline" size="sm" onClick={refreshCommits} disabled={isRefreshingCommits}>
-                    {isRefreshingCommits ? "Refreshing..." : "Refresh commits"}
-                </Button>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Auto-sync enabled</span>
+                    <Button variant="outline" size="sm" onClick={() => void refreshCommits()} disabled={isRefreshingCommits}>
+                        {isRefreshingCommits ? "Refreshing..." : "Refresh commits"}
+                    </Button>
+                </div>
             </div>
             {syncSummary.length > 0 && (
                 <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">

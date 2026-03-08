@@ -1,4 +1,11 @@
 {
+  "scripts": {
+    "desktop:install": "npm --prefix desktop-shell install",
+    "desktop:dev": "npm --prefix desktop-shell run dev",
+    "desktop:typecheck": "npm --prefix desktop-shell run typecheck",
+    "desktop:build": "npm --prefix desktop-shell run build",
+    "desktop:dist": "npm --prefix desktop-shell run dist"
+  },
   "dependencies": {
     "lucide-react": "^0.570.0",
     "react-icons": "^5.5.0"

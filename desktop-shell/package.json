@@ -1,0 +1,63 @@
+{
+  "name": "log-a-priori-desktop-shell",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Electron desktop shell for Log-a-Priori",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "clean": "rimraf dist",
+    "prepare:workflow": "npm --prefix ../workflow-app run build",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "npm run clean && npm run build:ts",
+    "dev": "npm run build:ts && electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dist": "npm run prepare:workflow && npm run build && electron-builder"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.20",
+    "electron": "^37.4.0",
+    "electron-builder": "^26.0.12",
+    "rimraf": "^6.1.0",
+    "typescript": "^5.9.2"
+  },
+  "build": {
+    "appId": "com.logapriori.desktop",
+    "productName": "Log-a-Priori",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../workflow-app",
+        "to": "resources/workflow-app",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}
