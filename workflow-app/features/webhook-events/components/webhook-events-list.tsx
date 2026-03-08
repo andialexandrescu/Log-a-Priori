@@ -21,6 +21,7 @@ interface Props {
 export function WebhookEventsList({ projectId, memberId }: Props) { 
     const queryClient = useQueryClient();
     const { data: events, isLoading, isError } = useGetMemberWebhookEvents(projectId, memberId);
+    const safeEvents = events ?? [];
     const [expandedEventIds, setExpandedEventIds] = useState<string[]>([]);
     const [isRefreshingCommits, setIsRefreshingCommits] = useState(false);
     const [syncSummary, setSyncSummary] = useState<string[]>([]);
@@ -67,16 +68,6 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
         };
     }, [projectId, memberId]);
 
-    if (isLoading) {
-        return <div>Loading events...</div>;
-    }
-    if (isError) {
-        return <div className="text-red-500">Could not load events</div>;
-    }
-    if (!events || events.length === 0) {
-        return <div>No webhook events yet</div>;
-    }
-
     const getEventGithubTimestamp = (event: any) => {
         if (event?.event_type === "commit") {
             return Date.parse(event?.payload?.commit?.author?.date || event?.payload?.author?.date || event?.payload?.timestamp || "") || 0;
@@ -85,7 +76,7 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
         return Date.parse(event?.created || "") || 0;
     };
 
-    const sortedEvents = [...events].sort((a, b) => getEventGithubTimestamp(b) - getEventGithubTimestamp(a));
+    const sortedEvents = [...safeEvents].sort((a, b) => getEventGithubTimestamp(b) - getEventGithubTimestamp(a));
 
     const expandEventBehaviour = (eventId: string) => {
         setExpandedEventIds(prev => 
@@ -104,12 +95,12 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
         );
 
     const refreshCommits = useCallback(async (options?: { silent?: boolean; auto?: boolean }) => {
-        if (!events || events.length === 0) {
+        if (safeEvents.length === 0) {
             return;
         }
 
         const repositories = Array.from(
-            new Set(events.map((event: any) => event.repository).filter(Boolean))
+            new Set(safeEvents.map((event: any) => event.repository).filter(Boolean))
         );
 
         if (repositories.length === 0) {
@@ -151,10 +142,10 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
         } finally {
             setIsRefreshingCommits(false);
         }
-    }, [events, memberId, projectId, queryClient]);
+    }, [memberId, projectId, queryClient, safeEvents]);
 
     useEffect(() => {
-        if (!events || events.length === 0) {
+        if (safeEvents.length === 0) {
             return;
         }
 
@@ -169,14 +160,24 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
         return () => {
             window.clearInterval(intervalId);
         };
-    }, [events, isRefreshingCommits, refreshCommits]);
+    }, [isRefreshingCommits, refreshCommits, safeEvents]);
+
+    if (isLoading) {
+        return <div>Loading events...</div>;
+    }
+    if (isError) {
+        return <div className="text-red-500">Could not load events</div>;
+    }
+    if (safeEvents.length === 0) {
+        return <div>No webhook events yet</div>;
+    }
 
     return (
         <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                     <h2 className="text-2xl font-bold">Recent webhook events</h2>
-                    <Badge variant="outline">{events.length}</Badge>
+                    <Badge variant="outline">{safeEvents.length}</Badge>
                 </div>
                 <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">Auto-sync enabled</span>
