@@ -5,7 +5,7 @@ export function CommitEventDetails({ payload, repository }: { payload: any; repo
     const commitData = payload.commit;
     const sha = payload.sha;
     const message = commitData?.message || payload?.message || "No message";
-    const dateValue = commitData?.author?.date || payload?.author_date;
+    const dateValue = commitData?.author?.date || payload?.author_date || payload?.timestamp;
     const branch = payload?.branch || "Unknown";
     const pusher = payload?.pusher || commitData?.author?.name || payload?.author_name || "Unknown";
     const senderLogin =
