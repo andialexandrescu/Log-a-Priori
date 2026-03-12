@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCreateProject } from "../api/use-create-project";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -15,10 +15,11 @@ import { useForm } from "react-hook-form";
 import { Chakra_Petch } from 'next/font/google';
 import { CreateMembersBulkSelect } from "../../members/components/create-members-bulk-select";
 import { ProjectRoleType } from "../../members/constants";
+import { toast } from "sonner";
 
 const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
 
-const steps = ["Details", "Invite for collaboration", "Review"];
+const steps = ["Details", "Invite for collaboration", "File path", "Review"];
 const gridCols = `grid-cols-${steps.length}`;
 
 interface ProjectSetupTabsProps {
@@ -27,6 +28,8 @@ interface ProjectSetupTabsProps {
 
 export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
   const [members, setMembers] = useState<{ userId: string; role: ProjectRoleType }[]>([]); // collect members locally
+  const [selectedRootPath, setSelectedRootPath] = useState<string | null>(null);
+  const [isSelectingPath, setIsSelectingPath] = useState(false);
 
   const [currentStep, setCurrentStep] = useState(0);
   const progress = ((currentStep + 1) / steps.length) * 100;
@@ -41,6 +44,50 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
 
   const { mutate, isPending } = useCreateProject();
 
+  useEffect(() => {
+    if (!window.desktopControl) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadRootPath = async () => {
+      try {
+        const rootPath = await window.desktopControl?.getRootDirectory();
+        if (!cancelled) {
+          setSelectedRootPath(rootPath ?? null);
+        }
+      } catch {
+      }
+    };
+
+    void loadRootPath();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSelectRootPath = async () => {
+    if (!window.desktopControl) {
+      return;
+    }
+
+    setIsSelectingPath(true);
+
+    try {
+      const selectedPath = await window.desktopControl.selectRootDirectory();
+      if (selectedPath) {
+        setSelectedRootPath(selectedPath);
+        toast.success("Save folder selected");
+      }
+    } catch {
+      toast.error("Could not select save folder");
+    } finally {
+      setIsSelectingPath(false);
+    }
+  };
+
   const form = useForm<z.infer<typeof createProjectSchema>>({
     resolver: zodResolver(createProjectSchema),
     defaultValues: {
@@ -49,7 +96,24 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
     },
   });
 
-  const onSubmit = (values: z.infer<typeof createProjectSchema>) => {
+  const onSubmit = async (values: z.infer<typeof createProjectSchema>) => {
+    if (window.desktopControl) {
+      try {
+        const existingRoot = await window.desktopControl.getRootDirectory();
+
+        if (!existingRoot) {
+          const selectedRoot = await window.desktopControl.selectRootDirectory();
+          if (!selectedRoot) {
+            toast.error("Select a save folder before creating the project");
+            return;
+          }
+        }
+      } catch {
+        toast.error("Could not validate the save folder");
+        return;
+      }
+    }
+
     mutate(
       { 
         project: values,
@@ -112,11 +176,25 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
                 )}
 
                 {index === 2 && (
+                  <div className="space-y-3">
+                    <p>Select where commit files will be saved.</p>
+                    <div className="rounded-md border bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
+                      <p className="font-medium text-foreground">Current path</p>
+                      <p className="mt-1 break-all">{selectedRootPath || "Not selected yet"}</p>
+                    </div>
+                    <Button type="button" variant="outline" onClick={handleSelectRootPath} disabled={isSelectingPath}>
+                      {isSelectingPath ? "Opening..." : "Choose save folder"}
+                    </Button>
+                  </div>
+                )}
+
+                {index === 3 && (
                   <div className="space-y-2">
                     <p>Review all settings</p>
                     <div className="text-sm text-muted-foreground">
                       <p>Name: {form.watch("name") || "-"}</p>
                       <p>Description: {form.watch("description") || "-"}</p>
+                      <p>Save folder: {selectedRootPath || "Will be selected on create"}</p>
                       <p>Members ({members.length}):</p>
                       <ul className="list-disc list-inside">
                         {members.map((m, i) => (

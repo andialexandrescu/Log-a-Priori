@@ -1,10 +1,12 @@
 import path from "node:path";
+import fs from "node:fs";
 import { AppOrchestrator } from "./services/orchestrator";
 
 const electron = require("electron") as {
   app: {
     whenReady: () => Promise<void>;
     on: (event: string, listener: (event?: { preventDefault: () => void }) => void) => void;
+    getPath: (name: string) => string;
     quit: () => void;
   };
   BrowserWindow: {
@@ -16,7 +18,14 @@ const electron = require("electron") as {
     getAllWindows: () => unknown[];
   };
   ipcMain: { handle: (channel: string, listener: (...args: unknown[]) => unknown) => void };
-  dialog: { showErrorBox: (title: string, content: string) => void };
+  dialog: {
+    showErrorBox: (title: string, content: string) => void;
+    showOpenDialog: (options: {
+      properties: string[];
+      title?: string;
+      defaultPath?: string;
+    }) => Promise<{ canceled: boolean; filePaths: string[] }>;
+  };
 };
 
 const { app, BrowserWindow, ipcMain, dialog } = electron;
@@ -29,6 +38,59 @@ let mainWindow: {
 const orchestrator = new AppOrchestrator();
 let isQuitting = false;
 let isStopping = false;
+
+interface DesktopSettings {
+  githubFilesRoot?: string;
+}
+
+function getSettingsFilePath(): string {
+  return path.join(app.getPath("userData"), "desktop-settings.json"); // returns where the app stores the saved file path setting
+}
+
+function readSettings(): DesktopSettings {
+  const settingsFilePath = getSettingsFilePath();
+  if (!fs.existsSync(settingsFilePath)) {
+    return {};
+  }
+
+  try {
+    const content = fs.readFileSync(settingsFilePath, "utf-8");
+    const parsed = JSON.parse(content) as DesktopSettings;
+    return parsed ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSettings(settings: DesktopSettings): void { // saves the file path setting object to disk as json
+  const settingsFilePath = getSettingsFilePath();
+  fs.mkdirSync(path.dirname(settingsFilePath), { recursive: true });
+  fs.writeFileSync(settingsFilePath, JSON.stringify(settings, null, 2), "utf-8");
+}
+
+export async function selectRootDirectory(): Promise<string | null> { // called via the handler inside knowledge-graph-root-directory.tsx
+  const existingRootDirectory = getRootDirectory();
+  const result = await dialog.showOpenDialog({
+    properties: ["openDirectory", "createDirectory"],
+    title: "Select directory for commit files",
+    defaultPath: existingRootDirectory ?? undefined
+  });
+
+  if (!result.canceled && result.filePaths.length > 0) {
+    const selectedPath = result.filePaths[0];
+    const settings = readSettings();
+    settings.githubFilesRoot = selectedPath;
+    writeSettings(settings);
+    return selectedPath;
+  }
+
+  return null;
+}
+
+export function getRootDirectory(): string | null {
+  const settings = readSettings();
+  return settings.githubFilesRoot || null;
+}
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -59,6 +121,23 @@ function registerIpc(): void {
 
   ipcMain.handle("desktop:status", () => {
     return orchestrator.getStatuses();
+  });
+
+  ipcMain.handle("desktop:select-root-directory", async () => {
+    return selectRootDirectory();
+  });
+
+  ipcMain.handle("desktop:get-root-directory", () => {
+    return getRootDirectory();
+  });
+
+  ipcMain.handle("desktop:run-knowledge-graph", async () => {
+    const rootDirectory = getRootDirectory();
+
+    return {
+      ok: true,
+      rootDirectory: rootDirectory ?? ""
+    };
   });
 
   orchestrator.onStatus((status) => {
