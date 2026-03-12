@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { sessionMiddleware } from "@/lib/session-middleware";
 import { zValidator } from "@hono/zod-validator";
 import { getCommitsQuerySchema } from "../schemas";
-import { enrichCommitWithDetails, getNextLinkUrl, githubHeaders, syncCommitFilesToSelectedRoot, type GithubCommitSummary } from "./github-commits-utils";
+import { enrichCommitWithDetails, getNextLinkUrl, githubHeaders, hasCommitFilesExport, syncCommitFilesToSelectedRoot, type GithubCommitSummary } from "./github-commits-utils";
 
 const mapCommitPayload = (payload: any) => ({
     sha: payload?.sha,
@@ -108,11 +108,47 @@ const commitsApp = new Hono()
                 return !!commitSha && !knownShas.has(commitSha);
             });
 
+            const existingCommitsInPage = commitsPage.filter((commitSummary: GithubCommitSummary) => {
+                const commitSha = commitSummary?.sha;
+                return !!commitSha && knownShas.has(commitSha);
+            });
+
             for (const commitSummary of missingCommitsInPage) {
                 knownShas.add(commitSummary.sha);
             }
 
             githubCommits.push(...missingCommitsInPage);
+
+            for (const commitSummary of existingCommitsInPage) {
+                const commitSha = commitSummary?.sha;
+                if (!commitSha) {
+                    continue;
+                }
+
+                const alreadyExported = await hasCommitFilesExport(repo, commitSha);
+                if (alreadyExported) {
+                    continue;
+                }
+
+                try {
+                    const normalizedCommit = await enrichCommitWithDetails({
+                        owner,
+                        repoName,
+                        sha: commitSha,
+                        summary: commitSummary,
+                        token,
+                        defaultBranch,
+                    });
+
+                    await syncCommitFilesToSelectedRoot({
+                        repository: repo,
+                        token,
+                        commit: normalizedCommit,
+                    });
+                } catch (error) {
+                    console.error(`Failed to reconcile local commit files for ${commitSha}:`, error);
+                }
+            }
 
             if (missingCommitsInPage.length === 0 && knownShas.size > 0) {
                 break; // stop once a full page contains only known shas

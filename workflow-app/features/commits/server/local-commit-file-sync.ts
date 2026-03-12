@@ -42,6 +42,16 @@ async function getSelectedRootDirectory(): Promise<string | null> {
     return null;
 }
 
+async function getCommitDirectoryIfConfigured(repository: string, sha: string): Promise<string | null> {
+    const rootDirectory = await getSelectedRootDirectory();
+
+    if (!rootDirectory || !sha) {
+        return null;
+    }
+
+    return getCommitDirectory(rootDirectory, repository, sha);
+}
+
 function sanitizePathSegments(value: string): string[] {
     return value
         .split(/[\\/]+/)
@@ -159,5 +169,20 @@ export async function syncCommitFilesToSelectedRoot({ repository, token, commit 
         }
 
         await writeRemovedPlaceholder({ commitDirectory, filePath: removedFile, sha });
+    }
+}
+
+export async function hasCommitFilesExport(repository: string, sha: string): Promise<boolean> {
+    const commitDirectory = await getCommitDirectoryIfConfigured(repository, sha);
+
+    if (!commitDirectory) {
+        return false;
+    }
+
+    try {
+        await fs.access(commitDirectory);
+        return true;
+    } catch {
+        return false;
     }
 }

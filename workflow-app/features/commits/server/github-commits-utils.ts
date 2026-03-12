@@ -189,6 +189,11 @@ export const syncCommitFilesToSelectedRoot = async ({ repository, token, commit 
     await module.syncCommitFilesToSelectedRoot({ repository, token, commit });
 };
 
+export const hasCommitFilesExport = async (repository: string, sha: string): Promise<boolean> => {
+    const module = await import("./local-commit-file-sync");
+    return module.hasCommitFilesExport(repository, sha);
+};
+
 // the backfill orchestrator calling enrichCommitWithDetails for each GithubCommitSummary
 export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, token }: EnrichAndStoreInitialCommitsInput): Promise<InitialBackfillResult> => {
     const [owner, repoName] = repository.split("/");

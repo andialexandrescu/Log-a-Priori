@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import PocketBase from 'pocketbase';
 import { sessionMiddleware } from "@/lib/session-middleware";
 import { webhookEventsSchema } from "../schemas";
+import { syncCommitFilesToSelectedRoot, type EnrichedCommitPayload } from "../../commits/server/github-commits-utils";
 
 const webhookEventsApp = new Hono()
     .get("/", sessionMiddleware, async (c) => {
@@ -86,6 +87,21 @@ const webhookEventsApp = new Hono()
                         await pb.collection("webhook_events").update(existing.items[0].id, {
                             payload: normalizedCommitPayload,
                         });
+                    }
+
+                    const [owner, repoName] = repo.split("/");
+                    const credential = await pb.collection("credentials").getFirstListItem(
+                        `member = "${memberId}" && api_keys.owner = "${owner}" && api_keys.repo = "${repoName}"`
+                    );
+
+                    try {
+                        await syncCommitFilesToSelectedRoot({
+                            repository: repo,
+                            token: credential.api_keys.token,
+                            commit: normalizedCommitPayload as EnrichedCommitPayload,
+                        });
+                    } catch (error) {
+                        console.error(`Failed to export webhook commit files for ${commit.id}:`, error);
                     }
                 }
 
