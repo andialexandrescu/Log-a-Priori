@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { sessionMiddleware } from "@/lib/session-middleware";
 import { zValidator } from "@hono/zod-validator";
 import { getCommitsQuerySchema } from "../schemas";
-import { enrichCommitWithDetails, getNextLinkUrl, githubHeaders, type GithubCommitSummary } from "./github-commits-utils";
+import { enrichCommitWithDetails, getNextLinkUrl, githubHeaders, syncCommitFilesToSelectedRoot, type GithubCommitSummary } from "./github-commits-utils";
 
 const mapCommitPayload = (payload: any) => ({
     sha: payload?.sha,
@@ -144,6 +144,17 @@ const commitsApp = new Hono()
                 repository: repo,
                 payload: normalizedCommit,
             });
+
+            try {
+                await syncCommitFilesToSelectedRoot({
+                    repository: repo,
+                    token,
+                    commit: normalizedCommit,
+                });
+            } catch (error) {
+                console.error(`Failed to export refreshed commit files for ${commitSha}:`, error);
+            }
+
             createdCount += 1;
         }
 

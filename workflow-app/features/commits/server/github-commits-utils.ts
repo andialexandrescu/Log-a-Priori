@@ -68,6 +68,9 @@ export type GithubCommitFile = {
 export type GithubCommitSummary = {
     sha?: string;
     files?: GithubCommitFile[];
+    parents?: Array<{
+        sha?: string;
+    }>;
     author?: {
         login?: string;
     };
@@ -75,11 +78,16 @@ export type GithubCommitSummary = {
         login?: string;
     };
     commit?: {
+        message?: string;
         author?: {
             name?: string;
+            email?: string;
+            date?: string;
         };
         committer?: {
             name?: string;
+            email?: string;
+            date?: string;
         };
     };
     [key: string]: unknown;
@@ -111,6 +119,12 @@ type EnrichCommitWithDetailsInput = {
     summary: GithubCommitSummary;
     token: string;
     defaultBranch?: string;
+};
+
+type SyncCommitFilesInput = {
+    repository: string;
+    token: string;
+    commit: EnrichedCommitPayload;
 };
 
 const getFileChangeArrays = (payload: GithubCommitSummary) => {
@@ -168,6 +182,11 @@ export const enrichCommitWithDetails = async ({ owner, repoName, sha, summary, t
         modified,
         removed,
     };
+};
+
+export const syncCommitFilesToSelectedRoot = async ({ repository, token, commit }: SyncCommitFilesInput): Promise<void> => {
+    const module = await import("./local-commit-file-sync");
+    await module.syncCommitFilesToSelectedRoot({ repository, token, commit });
 };
 
 // the backfill orchestrator calling enrichCommitWithDetails for each GithubCommitSummary
@@ -230,6 +249,17 @@ export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, t
             repository,
             payload: normalizedCommit,
         });
+
+        try {
+            await syncCommitFilesToSelectedRoot({
+                repository,
+                token,
+                commit: normalizedCommit,
+            });
+        } catch (error) {
+            console.error(`Failed to export initial backfill commit files for ${sha}:`, error);
+        }
+
         createdCount += 1;
     }
 
