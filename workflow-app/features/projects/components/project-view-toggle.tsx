@@ -18,21 +18,11 @@ export function ProjectViewToggle({ projectId }: ProjectViewToggleProps) {
     return (
         <div>
             <div className="flex gap-2">
-                <Button
-                    variant="ghost"
-                    size="sm"
-                    className={`rounded-b-none ${view === "events" ? "bg-muted hover:bg-muted" : "bg-white hover:bg-muted/50"}`}
-                    onClick={() => setView("events")}
-                >
+                <Button variant="ghost" size="sm" className={`rounded-b-none ${view === "events" ? "bg-muted hover:bg-muted" : "bg-white hover:bg-muted/50"}`} onClick={() => setView("events")}>
                     <GitCommitHorizontal className="mr-2 size-4" />
                     Recent events
                 </Button>
-                <Button
-                    variant="ghost"
-                    size="sm"
-                    className={`rounded-b-none ${view === "knowledge-graph" ? "bg-muted hover:bg-muted" : "bg-white hover:bg-muted/50"}`}
-                    onClick={() => setView("knowledge-graph")}
-                >
+                <Button variant="ghost" size="sm" className={`rounded-b-none ${view === "knowledge-graph" ? "bg-muted hover:bg-muted" : "bg-white hover:bg-muted/50"}`} onClick={() => setView("knowledge-graph")}>
                     <FolderOpen className="mr-2 size-4" />
                     Knowledge graph
                 </Button>
@@ -42,7 +32,9 @@ export function ProjectViewToggle({ projectId }: ProjectViewToggleProps) {
                 {view === "events" ? (
                     <MemberEventSelector projectId={projectId} />
                 ) : (
-                    <KnowledgeGraphRootDirectory />
+                    <div className="space-y-4">
+                        <KnowledgeGraphRootDirectory />
+                    </div>
                 )}
             </div>
         </div>
