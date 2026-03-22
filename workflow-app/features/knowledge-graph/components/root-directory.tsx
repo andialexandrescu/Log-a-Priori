@@ -23,7 +23,7 @@ export function KnowledgeGraphRootDirectory() {
         <div>
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-2xl">Knowledge graph</CardTitle>
+                    <CardTitle className="text-2xl">Root directory</CardTitle>
                     <CardDescription>
                         Local folder where project files are saved on this machine
                     </CardDescription>

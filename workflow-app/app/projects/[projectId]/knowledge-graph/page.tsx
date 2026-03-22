@@ -1,4 +1,5 @@
-import { KnowledgeGraphRootDirectory } from "@/features/knowledge-graph/components/knowledge-graph-root-directory";
+import { KnowledgeGraphRootDirectory } from "@/features/knowledge-graph/components/root-directory";
+import { KnowledgeGraphCanvas } from "@/features/knowledge-graph/components/knowledge-graph-canvas";
 
 type KnowledgeGraphPageProps = {
     params: Promise<{ projectId: string }>;
@@ -10,6 +11,7 @@ export default async function KnowledgeGraphPage({ params }: KnowledgeGraphPageP
     return (
         <div className="space-y-4">
             <KnowledgeGraphRootDirectory />
+            <KnowledgeGraphCanvas projectId={projectId} />
         </div>
     );
 }

@@ -4,7 +4,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { GitCommitHorizontal, FolderOpen } from "lucide-react";
 import { MemberEventSelector } from "@/features/webhook-events/components/member-event-selector";
-import { KnowledgeGraphRootDirectory } from "@/features/knowledge-graph/components/knowledge-graph-root-directory";
+import { KnowledgeGraphRootDirectory } from "@/features/knowledge-graph/components/root-directory";
+import { KnowledgeGraphCanvas } from "@/features/knowledge-graph/components/knowledge-graph-canvas";
 
 type View = "events" | "knowledge-graph";
 
@@ -34,6 +35,7 @@ export function ProjectViewToggle({ projectId }: ProjectViewToggleProps) {
                 ) : (
                     <div className="space-y-4">
                         <KnowledgeGraphRootDirectory />
+                        <KnowledgeGraphCanvas projectId={projectId} />
                     </div>
                 )}
             </div>

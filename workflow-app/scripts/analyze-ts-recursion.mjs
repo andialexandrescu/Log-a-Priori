@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from 'node:crypto';
 import { Node, Project, SyntaxKind, ts } from "ts-morph";
+import { buildVisualization } from "./ts-graph-visualization.mjs";
 
 const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".jsx"]);
 
@@ -256,6 +257,7 @@ function buildEntityContext(project, commitDirectory, sha) { // only collects fu
                 end: node.getEnd(),
                 signature: safeSignature(node),
                 contentHash: hashText(node.getText()),
+                code: node.getText(), // full source code of the function in order to produce meaningful embeddings
                 node, // keep reference for call analysis (will be discarded after)
             };
             context.functions.push(entity);
@@ -362,7 +364,7 @@ function extractCallEdges(context, edges) { // extracts CALLS edges between func
     }
 }
 
-function extractJSXEdges(context, edges) { // extracts jsx component usage edges
+function extractUsesEdges(context, edges) { // extracts jsx/ component usage edges
     const dedupe = new Set();
 
     for (const func of context.functions) {
@@ -434,7 +436,7 @@ async function analyzeCommitDirectory(commitDirectory) { // analyzes a single co
 
     const edges = [];
     extractCallEdges(context, edges); // includes both cross-file and in-file
-    extractJSXEdges(context, edges); // jsx component usage edges
+    extractUsesEdges(context, edges); // jsx/ component usage edges
 
     const functions = context.functions.map(f => {
         const { node, ...rest } = f;
@@ -442,7 +444,7 @@ async function analyzeCommitDirectory(commitDirectory) { // analyzes a single co
     });
 
     const callEdges = edges.filter(e => e.kind === "CALLS").length;
-    const jsxEdges = edges.filter(e => e.kind === "USES").length;
+    const usesEdges = edges.filter(e => e.kind === "USES").length;
     const crossFileEdges = edges.filter(e => e.scope === "cross-file").length;
     const inFileEdges = edges.filter(e => e.scope === "in-file").length;
 
@@ -488,7 +490,7 @@ async function analyzeCommitDirectory(commitDirectory) { // analyzes a single co
         filesAnalyzed: sourceFiles.length,
         functionCount: functions.length,
         callEdges,
-        jsxComponentEdges: jsxEdges,
+        usesEdges,
         totalEdges: edges.length,
         crossFileEdges,
         inFileEdges,
@@ -551,7 +553,8 @@ async function run() {
     } // collecting all function nodes (deduplicate by id)
 
     const callEdgesOnly = edges.filter(e => e.kind === "CALLS");
-    const jsxEdgesOnly = edges.filter(e => e.kind === "USES");
+    const usesEdgesOnly = edges.filter(e => e.kind === "USES");
+    const visualization = buildVisualization(nodes, edges);
 
     const output = {
         generatedAt: new Date().toISOString(),
@@ -565,19 +568,20 @@ async function run() {
             callEdges: callEdgesOnly.length,
             crossFileCallEdges: callEdgesOnly.filter(e => e.scope === "cross-file").length,
             inFileCallEdges: callEdgesOnly.filter(e => e.scope === "in-file").length,
-            jsxEdges: jsxEdgesOnly.length,
+            usesEdges: usesEdgesOnly.length,
         },
         graph: {
             nodes,
             edges: edges, // includes all edges - both CALLS and USES
         },
+        visualization,
         commits: commitResults.map(c => ({
             sha: c.sha,
             commitDirectory: c.commitDirectory,
             filesAnalyzed: c.filesAnalyzed,
             functions: c.functionCount,
             callEdges: c.callEdges,
-            jsxComponentEdges: c.jsxComponentEdges,
+            usesEdges: c.usesEdges,
             crossFileCallEdges: c.crossFileCallEdges,
             inFileCallEdges: c.inFileCallEdges,
         })),
@@ -591,7 +595,7 @@ async function run() {
     console.log(`Analyzed files: ${output.summary.filesAnalyzed}`);
     console.log(`Functions: ${output.summary.functions}`);
     console.log(`Call edges: ${output.summary.callEdges} (cross-file: ${output.summary.crossFileCallEdges}, in-file: ${output.summary.inFileCallEdges})`);
-    console.log(`JSX component edges: ${output.summary.jsxEdges}`);
+    console.log(`Uses edges: ${output.summary.usesEdges}`);
     console.log(`Report: ${outputPath}`);
 }
 
