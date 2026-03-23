@@ -364,7 +364,7 @@ function extractCallEdges(context, edges) { // extracts CALLS edges between func
     }
 }
 
-function extractUsesEdges(context, edges) { // extracts jsx/ component usage edges
+function extractUsesEdges(context, edges) { // extracts jsx/component usage as CALLS edges
     const dedupe = new Set();
 
     for (const func of context.functions) {
@@ -399,7 +399,7 @@ function extractUsesEdges(context, edges) { // extracts jsx/ component usage edg
             const loc = getLocation(jsxElement);
 
             const edge = {
-                kind: "USES",
+                kind: "CALLS",
                 from: func.id,
                 to: target.id,
                 label: componentName,
@@ -436,7 +436,7 @@ async function analyzeCommitDirectory(commitDirectory) { // analyzes a single co
 
     const edges = [];
     extractCallEdges(context, edges); // includes both cross-file and in-file
-    extractUsesEdges(context, edges); // jsx/ component usage edges
+    extractUsesEdges(context, edges); // jsx/ component usage edges considered part of CALLS edges
 
     const functions = context.functions.map(f => {
         const { node, ...rest } = f;
@@ -444,7 +444,6 @@ async function analyzeCommitDirectory(commitDirectory) { // analyzes a single co
     });
 
     const callEdges = edges.filter(e => e.kind === "CALLS").length;
-    const usesEdges = edges.filter(e => e.kind === "USES").length;
     const crossFileEdges = edges.filter(e => e.scope === "cross-file").length;
     const inFileEdges = edges.filter(e => e.scope === "in-file").length;
 
@@ -490,7 +489,6 @@ async function analyzeCommitDirectory(commitDirectory) { // analyzes a single co
         filesAnalyzed: sourceFiles.length,
         functionCount: functions.length,
         callEdges,
-        usesEdges,
         totalEdges: edges.length,
         crossFileEdges,
         inFileEdges,
@@ -512,6 +510,25 @@ function buildDefaultOutputPath(rootPath, repoPath = "") {
     }
 
     return path.join(normalizedRoot, "analysis", "ts-code-graph.json");
+}
+
+function removeIsolatedNodes(nodes, edges) {
+    const connectedNodeIds = new Set();
+
+    for (const edge of edges) {
+        if (edge?.from) connectedNodeIds.add(edge.from);
+        if (edge?.to) connectedNodeIds.add(edge.to);
+    }
+
+    const filteredNodes = nodes.filter((node) => connectedNodeIds.has(node.id));
+    const filteredNodeIds = new Set(filteredNodes.map((node) => node.id));
+    const filteredEdges = edges.filter((edge) => filteredNodeIds.has(edge.from) && filteredNodeIds.has(edge.to));
+
+    return {
+        nodes: filteredNodes,
+        edges: filteredEdges,
+        removedCount: nodes.length - filteredNodes.length,
+    };
 }
 
 async function run() {
@@ -552,9 +569,13 @@ async function run() {
         edges.push(...commit.edges);
     } // collecting all function nodes (deduplicate by id)
 
-    const callEdgesOnly = edges.filter(e => e.kind === "CALLS");
-    const usesEdgesOnly = edges.filter(e => e.kind === "USES");
-    const visualization = buildVisualization(nodes, edges);
+    const prunedGraph = removeIsolatedNodes(nodes, edges);
+    const finalNodes = prunedGraph.nodes;
+    const finalEdges = prunedGraph.edges;
+    const isolatedNodesRemoved = prunedGraph.removedCount;
+
+    const callEdgesOnly = finalEdges.filter(e => e.kind === "CALLS");
+    const visualization = buildVisualization(finalNodes, finalEdges);
 
     const output = {
         generatedAt: new Date().toISOString(),
@@ -564,15 +585,15 @@ async function run() {
         summary: {
             commitsAnalyzed: commitResults.length,
             filesAnalyzed: commitResults.reduce((s, c) => s + c.filesAnalyzed, 0),
-            functions: nodes.length,
+            functions: finalNodes.length,
+            isolatedNodesRemoved,
             callEdges: callEdgesOnly.length,
             crossFileCallEdges: callEdgesOnly.filter(e => e.scope === "cross-file").length,
             inFileCallEdges: callEdgesOnly.filter(e => e.scope === "in-file").length,
-            usesEdges: usesEdgesOnly.length,
         },
         graph: {
-            nodes,
-            edges: edges, // includes all edges - both CALLS and USES
+            nodes: finalNodes,
+            edges: finalEdges,
         },
         visualization,
         commits: commitResults.map(c => ({
@@ -581,7 +602,6 @@ async function run() {
             filesAnalyzed: c.filesAnalyzed,
             functions: c.functionCount,
             callEdges: c.callEdges,
-            usesEdges: c.usesEdges,
             crossFileCallEdges: c.crossFileCallEdges,
             inFileCallEdges: c.inFileCallEdges,
         })),
@@ -594,8 +614,8 @@ async function run() {
     console.log(`Analyzed commits: ${output.summary.commitsAnalyzed}`);
     console.log(`Analyzed files: ${output.summary.filesAnalyzed}`);
     console.log(`Functions: ${output.summary.functions}`);
+    console.log(`Removed isolated nodes: ${output.summary.isolatedNodesRemoved}`);
     console.log(`Call edges: ${output.summary.callEdges} (cross-file: ${output.summary.crossFileCallEdges}, in-file: ${output.summary.inFileCallEdges})`);
-    console.log(`Uses edges: ${output.summary.usesEdges}`);
     console.log(`Report: ${outputPath}`);
 }
 

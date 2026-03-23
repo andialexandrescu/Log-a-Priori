@@ -96,16 +96,12 @@ export function buildVisualization(nodes, edges) {
     // processing all valid edges and categorizing them
     const allEdges = edges.filter((edge) => typeof edge.from === "string" && typeof edge.to === "string" && !!edge.to).map((edge) => makeEdgeRecord(edge));
 
-    const callsInFile = allEdges.filter((edge) => edge.kind === "CALLS" && edge.scope !== "cross-file");
-    const callsCrossFile = allEdges.filter((edge) => edge.kind === "CALLS" && edge.scope === "cross-file");
-    const usesInFile = allEdges.filter((edge) => edge.kind === "USES" && edge.scope !== "cross-file");
-    const usesCrossFile = allEdges.filter((edge) => edge.kind === "USES" && edge.scope === "cross-file");
+    const callsInFile = allEdges.filter((edge) => edge.scope !== "cross-file");
+    const callsCrossFile = allEdges.filter((edge) => edge.scope === "cross-file");
 
     const components = computeConnectedComponents(functionNodes, [
         ...callsInFile,
         ...callsCrossFile,
-        ...usesInFile,
-        ...usesCrossFile,
     ]);
 
     return {
@@ -114,10 +110,6 @@ export function buildVisualization(nodes, edges) {
             calls: {
                 inFile: callsInFile,
                 crossFile: callsCrossFile,
-            },
-            uses: {
-                inFile: usesInFile,
-                crossFile: usesCrossFile,
             },
         },
         components,

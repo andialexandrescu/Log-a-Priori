@@ -7,7 +7,6 @@ type GraphCounts = {
     nodes: number;
     edges: number;
     callEdges: number;
-    usesEdges: number;
     inFileEdges: number;
     crossFileEdges: number;
     roots: number;
@@ -34,7 +33,6 @@ export function KnowledgeGraphStatsControls({ minimalMode, onMinimalModeChange, 
                 <Badge variant="outline">Functions {counts.nodes}</Badge>
                 <Badge variant="outline">Edges {counts.edges}</Badge>
                 <Badge variant="outline">Calls {counts.callEdges}</Badge>
-                <Badge variant="outline">Uses {counts.usesEdges}</Badge>
                 <Badge variant="outline">In-file {counts.inFileEdges}</Badge>
                 <Badge variant="outline">Cross-file {counts.crossFileEdges}</Badge>
                 <Badge variant="outline">Roots {counts.roots}</Badge>
