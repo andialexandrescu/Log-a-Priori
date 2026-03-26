@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "kg:analyze:ts": "node ./scripts/analyze-ts-recursion.mjs"
+    "kg:analyze": "node ./scripts/analyze-recursion.js"
   },
   "dependencies": {
     "@base-ui/react": "^1.2.0",
