@@ -9,6 +9,7 @@ type SyncCommitFilesInput = {
     repository: string;
     token: string;
     commit: EnrichedCommitPayload;
+    projectId?: string;
 };
 
 type DesktopSettings = {
@@ -26,8 +27,13 @@ function getSettingsCandidates(): string[] {
     ];
 }
 
-async function getSelectedRootDirectory(): Promise<string | null> {
-    for (const candidate of getSettingsCandidates()) {
+async function getSelectedRootDirectory(projectId?: string): Promise<string | null> {
+    if (projectId) { // use the project  specific root path
+        const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+        return path.join(appData, "log-a-priori-desktop-shell", projectId, "commits");
+    }
+
+    for (const candidate of getSettingsCandidates()) { // checking global desktop settings otherwise
         try {
             const raw = await fs.readFile(candidate, "utf8");
             const parsed = JSON.parse(raw) as DesktopSettings;
@@ -127,8 +133,8 @@ async function writeManifest(params: { commitDirectory: string; repository: stri
     await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 }
 
-export async function syncCommitFilesToSelectedRoot({ repository, token, commit }: SyncCommitFilesInput): Promise<void> {
-    const rootDirectory = await getSelectedRootDirectory();
+export async function syncCommitFilesToSelectedRoot({ repository, token, commit, projectId }: SyncCommitFilesInput): Promise<void> {
+    const rootDirectory = await getSelectedRootDirectory(projectId);
     const sha = typeof commit.sha === "string" ? commit.sha : "";
 
     if (!rootDirectory || !sha) {

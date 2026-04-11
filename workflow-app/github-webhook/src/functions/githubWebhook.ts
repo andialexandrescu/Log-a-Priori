@@ -133,5 +133,6 @@ export async function githubWebhook(request: HttpRequest, context: InvocationCon
 app.http('githubWebhook', {
     methods: ['POST'],
     authLevel: 'anonymous',
+    route: 'githubWebhook',
     handler: githubWebhook,
 });

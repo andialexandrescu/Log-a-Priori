@@ -36,7 +36,7 @@ export const useGetCodeGraph = (projectId: string) => {
                     const notFoundMessage =
                         "message" in json && typeof json.message === "string"
                             ? json.message
-                            : "Run the extractor first to generate analysis/ts-code-graph.json.";
+                            : "Run the extractor first to generate analysis/ts-code-graph.json";
                     toast.error(notFoundMessage);
                 }
 

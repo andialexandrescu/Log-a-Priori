@@ -20,17 +20,29 @@ export const useCreateCredential = () => {
 
     const mutation = useMutation<SuccessResponseType, Error, CreateCredentialInput>({
         mutationFn: async ({ projectId, memberId, ...json }) => {
-            const response = await client.api.projects[":projectId"]["members"][":memberId"]["credentials"]["$post"]({
-                param: { projectId, memberId },
-                json
-            });
-            const result = await response.json();
+            try {
+                const response = await client.api.projects[":projectId"]["members"][":memberId"]["credentials"]["$post"]({
+                    param: { projectId, memberId },
+                    json
+                });
+                const result = await response.json();
 
-            if (!("data" in result)) {
-                throw new Error(result.error || "Failed to create credential");
+                if (!("data" in result)) {
+                    const errorMessage = result.error || "Failed to create credential";
+                    console.error("Credential creation error:", result);
+                    throw new Error(errorMessage);
+                }
+
+                return result;
+            } catch (error: any) {
+                if (error instanceof Error && error.message) {
+                    throw error;
+                }
+                
+                const message = error?.message || "Failed to create credential";
+                console.error("Credential mutation error:", error);
+                throw new Error(message);
             }
-
-            return result;
         },
         onSuccess: async (_data, variables) => {
             await queryClient.invalidateQueries({
@@ -38,8 +50,9 @@ export const useCreateCredential = () => {
             });
             toast.success("Credential created successfully");
         },
-        onError: () => {
-            toast.error("Failed to create credential");
+        onError: (error) => {
+            console.error("Failed to create credential:", error.message);
+            toast.error(error.message || "Failed to create credential");
         }
     });
     return mutation;

@@ -144,6 +144,7 @@ const commitsApp = new Hono()
                         repository: repo,
                         token,
                         commit: normalizedCommit,
+                        projectId,
                     });
                 } catch (error) {
                     console.error(`Failed to reconcile local commit files for ${commitSha}:`, error);
@@ -186,6 +187,7 @@ const commitsApp = new Hono()
                     repository: repo,
                     token,
                     commit: normalizedCommit,
+                    projectId,
                 });
             } catch (error) {
                 console.error(`Failed to export refreshed commit files for ${commitSha}:`, error);

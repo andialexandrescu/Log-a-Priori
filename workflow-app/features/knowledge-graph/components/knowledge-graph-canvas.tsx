@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Loader2, Maximize2, Minimize2 } from "lucide-react";
+import { Loader2, Maximize2, Minimize2, RefreshCw } from "lucide-react";
 import { GraphCanvas, lightTheme } from "reagraph";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,7 @@ import { useGetCodeGraph } from "../api/use-get-code-graph";
 import { KnowledgeGraphStatsControls } from "./stats-controls";
 import { KnowledgeGraphPagerControls } from "./pager-controls";
 import { Button } from "@/components/ui/button";
+import { useQueryClient } from "@tanstack/react-query";
 
 type FunctionNode = {
     key: string;
@@ -96,6 +97,7 @@ function isVisibleFunction(node: FunctionNode, searchText: string): boolean {
 
 export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
     const { data, isLoading } = useGetCodeGraph(projectId);
+    const queryClient = useQueryClient();
     const [search, setSearch] = useState("");
     const [currentComponentIndex, setCurrentComponentIndex] = useState(0);
     const [viewMode, setViewMode] = useState<GraphViewMode>("component");
@@ -104,6 +106,20 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
     const [hoveredNode, setHoveredNode] = useState<FunctionNode | null>(null);
     const [hoveredEdge, setHoveredEdge] = useState<FunctionEdge | null>(null);
     const [hoverClientPos, setHoverClientPos] = useState<{ x: number; y: number } | null>(null);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+    const handleRunAnalysis = async () => {
+        if (typeof window === "undefined" || !window.desktopControl || !projectId) return;
+        setIsAnalyzing(true);
+        try {
+            const result = await window.desktopControl.runKnowledgeGraphAnalysis(projectId);
+            if (result.ok) {
+                await queryClient.refetchQueries({ queryKey: ["projects", projectId, "knowledge-graph"], exact: true });
+            }
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
 
     const graph = data?.data?.graph;
     const visualization = data?.data?.visualization;
@@ -172,7 +188,14 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
     const counts = useMemo(() => { // counts are used for stats controls
         const nodes = graphData.nodes.length;
         const edges = graphData.edges.length;
-        const callEdges = graphData.edges.length;
+        const callEdges = graphData.edges.filter((e) => {
+            const edge = e.data as FunctionEdge | undefined;
+            return edge?.kind === "CALLS";
+        }).length;
+        const usesEdges = graphData.edges.filter((e) => {
+            const edge = e.data as FunctionEdge | undefined;
+            return edge?.kind === "USES";
+        }).length;
         const inFileEdges = graphData.edges.filter((e) => {
             const edge = e.data as FunctionEdge | undefined;
             return edge?.scope !== "cross-file";
@@ -185,7 +208,7 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
             !graphData.edges.some((e) => e.target === node.id)
         ).length;
         const files = new Set(graphData.nodes.map((n) => n.data.file)).size;
-        return { nodes, edges, callEdges, inFileEdges, crossFileEdges, roots, files };
+        return { nodes, edges, callEdges, usesEdges, inFileEdges, crossFileEdges, roots, files };
     }, [graphData]);
 
     const nodeById = useMemo(() => {
@@ -219,7 +242,7 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
                 <CardTitle className="text-2xl">Graph canvas</CardTitle>
                 <CardDescription>No graph file found</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <CardContent className="text-sm text-muted-foreground">
                 <p>Run the extractor first to generate analysis/ts-code-graph.json</p>
             </CardContent>
             </Card>
@@ -245,9 +268,14 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
                             {isComponentView ? "Function call map by connected component" : "Function call map across all commits"}
                         </CardDescription>
                     </div>
-                    <Button onClick={toggleFullScreen} className="rounded-md p-2 hover:bg-muted transition-colors" aria-label={fullScreen ? "Exit full screen" : "Enter full screen"}>
-                        {fullScreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        <Button onClick={handleRunAnalysis} disabled={isAnalyzing} className="rounded-md p-2 hover:bg-muted transition-colors" aria-label="Refresh analysis" title="Re-run analysis">
+                            {isAnalyzing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                        </Button>
+                        <Button onClick={toggleFullScreen} className="rounded-md p-2 hover:bg-muted transition-colors" aria-label={fullScreen ? "Exit full screen" : "Enter full screen"}>
+                            {fullScreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+                        </Button>
+                    </div>
                 </div>
                 <div className="flex items-center gap-2">
                     <Button variant={isComponentView ? "default" : "outline"} size="sm" onClick={() => setViewMode("component")}>
@@ -257,7 +285,7 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
                         All Commits View
                     </Button>
                 </div>
-                <KnowledgeGraphStatsControls minimalMode={minimalMode} onMinimalModeChange={setMinimalMode} counts={counts}/>
+                <KnowledgeGraphStatsControls minimalMode={minimalMode} onMinimalModeChange={setMinimalMode} counts={counts} projectId={projectId}/>
                 {isComponentView && (
                     <KnowledgeGraphPagerControls currentComponentIndex={currentComponentIndex} componentCount={componentCount} selectedComponentLabel={selectedComponentLabel} onPrevious={goToPreviousComponent} onNext={goToNextComponent}/>
                 )}
@@ -265,7 +293,10 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
             )}
             {fullScreen && (
                 <div className="space-y-3">
-                    <div className="flex items-center justify-end">
+                    <div className="flex items-center justify-end gap-2">
+                        <Button onClick={handleRunAnalysis} disabled={isAnalyzing} className="rounded-md p-2 hover:bg-muted transition-colors" aria-label="Refresh analysis" title="Re-run analysis">
+                            {isAnalyzing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                        </Button>
                         <Button  onClick={toggleFullScreen} className="rounded-md p-2 hover:bg-muted transition-colors" aria-label={fullScreen ? "Exit full screen" : "Enter full screen"}>
                             {fullScreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
                         </Button>
@@ -278,7 +309,7 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
                             All Commits View
                         </Button>
                     </div>
-                    <KnowledgeGraphStatsControls minimalMode={minimalMode} onMinimalModeChange={setMinimalMode} counts={counts}/>
+                    <KnowledgeGraphStatsControls minimalMode={minimalMode} onMinimalModeChange={setMinimalMode} counts={counts} projectId={projectId}/>
                     {isComponentView && (
                         <KnowledgeGraphPagerControls currentComponentIndex={currentComponentIndex} componentCount={componentCount} selectedComponentLabel={selectedComponentLabel} onPrevious={goToPreviousComponent} onNext={goToNextComponent}/>
                     )}

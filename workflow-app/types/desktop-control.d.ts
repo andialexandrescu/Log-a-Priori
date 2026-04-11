@@ -1,10 +1,15 @@
 interface DesktopControlBridge { // the bridge object exposed by preload.ts
-    selectRootDirectory: () => Promise<string | null>;
-    getRootDirectory: () => Promise<string | null>;
+    getProjectCommitStorageRootDirectory: (projectId: string) => Promise<string>;
+
+    selectProjectRootDirectory: (projectId?: string) => Promise<string | null>;
+    getProjectRootDirectory: (projectId?: string) => Promise<string | null>;
+
+    runKnowledgeGraphAnalysis: (projectId: string) => Promise<{ ok: boolean; message?: string; error?: string }>;
+    onKnowledgeGraphAnalysisProgress: (callback: (data: { message: string; error?: boolean }) => void) => () => void;
 }
 
 declare global {
-    interface Window { // calling window.desktopControl.getRootDirectory() would cause an error
+    interface Window { // calling window.desktopControl.getProjectRootDirectory() would cause an error
         desktopControl?: DesktopControlBridge;
     }
 }

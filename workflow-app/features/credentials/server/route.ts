@@ -6,6 +6,37 @@ import { createCredentialsSchema } from "../schemas";
 import { enrichAndStoreInitialCommits, githubHeaders, mapGithubApiError, parseGithubErrorPayload, type InitialBackfillResult } from "../../commits/server/github-commits-utils";
 
 const credentialsApp = new Hono()
+    .get("/", sessionMiddleware, async (c) => { // get the github webhook credential for a member
+        const pb = c.get("pb");
+        const account = c.get("account");
+        const memberId = c.req.param("memberId");
+
+        if (!account) {
+            return c.json({ error: "Unauthorized" }, 401);
+        }
+
+        if (!memberId) {
+            return c.json({ error: "Member is required" }, 400);
+        }
+
+        try {
+            const member = await pb.collection("members").getOne(memberId, { expand: "user,project" });
+            if (member.user !== account.id) {
+                return c.json({ error: "You do not have access to this member's credentials" }, 403);
+            }
+
+            const credentials = await pb.collection("credentials").getFullList({filter: `member = "${memberId}"`}); // getting all credentials for this member (only one)
+
+            if (credentials.length === 0) {
+                return c.json({ data: null }, 200);
+            }
+
+            return c.json({ data: credentials[0] }, 200);
+        } catch (error: any) {
+            console.error("Failed to fetch credential:", error);
+            return c.json({ error: "Failed to fetch credential" }, 500);
+        }
+    })
     .post("/", sessionMiddleware, zValidator("json", createCredentialsSchema), async (c) => {
         const pb = c.get("pb");
         const account = c.get("account");
@@ -39,6 +70,13 @@ const credentialsApp = new Hono()
 
             const { token, owner, repo } = data.api_keys;
             const webhookUrl = process.env.AZURE_FUNCTION_URL;
+            
+            if (!webhookUrl) {
+                throw new Error("AZURE_FUNCTION_URL is not configured");
+            }
+            
+            console.log(`Creating GitHub webhook for ${owner}/${repo} with url: ${webhookUrl}`);
+            
             const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
                 headers: githubHeaders(token),
             });
@@ -62,7 +100,7 @@ const credentialsApp = new Hono()
             const githubRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/hooks`, { // creates the webhook on github using the user's token and the generated secret
                 method: 'POST',
                 headers: {
-                    Authorization: `Bearer ${token}`,
+                    Authorization: `token ${token}`,
                     Accept: 'application/vnd.github.v3+json',
                     'Content-Type': 'application/json',
                 },
@@ -78,22 +116,34 @@ const credentialsApp = new Hono()
                     },
                 }),
             });
-
+            
             if (!githubRes.ok) { // if the creation fails, the credential should be deleted
                 const payload = await parseGithubErrorPayload(githubRes);
-                const mapped = mapGithubApiError(githubRes.status, payload);
                 console.error('GitHub webhook creation failed:', payload);
                 await pb.collection("credentials").delete(credentials.id);
+                
+                let errorMessage = "Failed to create GitHub webhook";
+                let statusCode: 400 | 401 | 404 | 500 = 500;
+                
+                if (githubRes.status === 422) {
+                    errorMessage = "Webhook configuration invalid, verify the webhook url is accessible";
+                    statusCode = 400;
+                } else {
+                    const mapped = mapGithubApiError(githubRes.status, payload);
+                    errorMessage = mapped.message;
+                    statusCode = mapped.status as 401 | 404 | 500;
+                }
+                
                 return c.json(
                     {
-                        error: mapped.message,
+                        error: errorMessage,
                         github: {
                             status: githubRes.status,
                             message: payload.message,
                             documentation_url: payload.documentation_url,
                         },
                     },
-                    mapped.status as 401 | 404 | 500
+                    statusCode
                 );
             }
 
@@ -110,6 +160,7 @@ const credentialsApp = new Hono()
                         memberId,
                         repository: `${owner}/${repo}`,
                         token,
+                        projectId,
                     });
                 } catch (backfillError) {
                     console.error("Initial commit enrichment failed:", backfillError);
@@ -117,9 +168,72 @@ const credentialsApp = new Hono()
             }
 
             return c.json({ data: credentials, initialBackfill }, 201);
-        } catch (error) {
+        } catch (error: any) {
             console.error("Failed to create credential:", error);
-            return c.json({ error: "Failed to create credential" }, 500);
+            
+            let errorMessage = "Failed to create credential";
+            let statusCode: 400 | 401 | 404 | 500 = 500;
+            
+            if (error instanceof Error) {
+                if (error.message.includes("404") || error.message.includes("not found")) {
+                    errorMessage = "Repository not found, check the repository owner and name";
+                    statusCode = 404;
+                } else if (error.message.includes("401") || error.message.includes("unauthorized")) {
+                    errorMessage = "Invalid GitHub token or insufficient permissions";
+                    statusCode = 401;
+                } else if (error.message.includes("validation")) {
+                    errorMessage = error.message;
+                    statusCode = 400;
+                } else {
+                    errorMessage = error.message || "Failed to create credential";
+                }
+            }
+            
+            return c.json({ error: errorMessage }, statusCode);
+        }
+    })
+    .patch("/:credentialId", sessionMiddleware, zValidator("json", createCredentialsSchema), async (c) => { // update an existing github webhook credential
+        const pb = c.get("pb");
+        const account = c.get("account");
+        const memberId = c.req.param("memberId");
+        const credentialId = c.req.param("credentialId");
+        const data = c.req.valid("json");
+
+        if (!account) {
+            return c.json({ error: "Unauthorized" }, 401);
+        }
+
+        if (!memberId || !credentialId) {
+            return c.json({ error: "Member and credential are required" }, 400);
+        }
+
+        try {
+            const member = await pb.collection("members").getOne(memberId, { expand: "user,project" });
+            if (member.user !== account.id) {
+                return c.json({ error: "You do not have access to this member's credentials" }, 403);
+            }
+
+            const credential = await pb.collection("credentials").getOne(credentialId);
+            if (credential.member !== memberId) {
+                return c.json({ error: "This credential does not belong to this member" }, 403);
+            }
+
+            const updated = await pb.collection("credentials").update(credentialId, {
+                name: data.name,
+                api_keys: {
+                    ...credential.api_keys,
+                    token: data.api_keys.token,
+                    owner: data.api_keys.owner,
+                    repo: data.api_keys.repo,
+                    webhookSecret: credential.api_keys.webhookSecret, // keep existing secret
+                },
+                api_limitations: data.api_limitations,
+            });
+
+            return c.json({ data: updated }, 200);
+        } catch (error: any) {
+            console.error("Failed to update credential:", error);
+            return c.json({ error: "Failed to update credential" }, 500);
         }
     });
 

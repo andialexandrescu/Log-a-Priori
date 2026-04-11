@@ -28,8 +28,6 @@ interface ProjectSetupTabsProps {
 
 export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
   const [members, setMembers] = useState<{ userId: string; role: ProjectRoleType }[]>([]); // collect members locally
-  const [selectedRootPath, setSelectedRootPath] = useState<string | null>(null);
-  const [isSelectingPath, setIsSelectingPath] = useState(false);
 
   const [currentStep, setCurrentStep] = useState(0);
   const progress = ((currentStep + 1) / steps.length) * 100;
@@ -44,50 +42,6 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
 
   const { mutate, isPending } = useCreateProject();
 
-  useEffect(() => {
-    if (!window.desktopControl) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadRootPath = async () => {
-      try {
-        const rootPath = await window.desktopControl?.getRootDirectory();
-        if (!cancelled) {
-          setSelectedRootPath(rootPath ?? null);
-        }
-      } catch {
-      }
-    };
-
-    void loadRootPath();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleSelectRootPath = async () => {
-    if (!window.desktopControl) {
-      return;
-    }
-
-    setIsSelectingPath(true);
-
-    try {
-      const selectedPath = await window.desktopControl.selectRootDirectory();
-      if (selectedPath) {
-        setSelectedRootPath(selectedPath);
-        toast.success("Save folder selected");
-      }
-    } catch {
-      toast.error("Could not select save folder");
-    } finally {
-      setIsSelectingPath(false);
-    }
-  };
-
   const form = useForm<z.infer<typeof createProjectSchema>>({
     resolver: zodResolver(createProjectSchema),
     defaultValues: {
@@ -96,31 +50,28 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
     },
   });
 
-  const onSubmit = async (values: z.infer<typeof createProjectSchema>) => {
+  const onSubmit = async (values: z.infer<typeof createProjectSchema>) => { // commit storage is auto managed per project in appdata
     if (window.desktopControl) {
-      try {
-        const existingRoot = await window.desktopControl.getRootDirectory();
-
-        if (!existingRoot) {
-          const selectedRoot = await window.desktopControl.selectRootDirectory();
-          if (!selectedRoot) {
-            toast.error("Select a save folder before creating the project");
-            return;
-          }
-        }
-      } catch {
-        toast.error("Could not validate the save folder");
-        return;
+      let projectRoot = null;
+      if (typeof window !== "undefined" && window.desktopControl) {
+        projectRoot = await window.desktopControl.getProjectRootDirectory();
       }
+      if (!projectRoot) {
+        projectRoot = await window.desktopControl.selectProjectRootDirectory();
+        if (!projectRoot) {
+          toast.error("You must select a project root folder before creating the project");
+          return;
+        }
+      }
+      toast.success("Project root set!");
     }
-
     mutate(
       { 
         project: values,
         members
       },
       {
-        onSuccess: (data) => {
+        onSuccess: async (data) => {
           onSuccess?.(data);
         },
         onError: (error) => {
@@ -176,15 +127,16 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
                 )}
 
                 {index === 2 && (
-                  <div className="space-y-3">
-                    <p>Select where commit files will be saved.</p>
-                    <div className="rounded-md border bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
-                      <p className="font-medium text-foreground">Current path</p>
-                      <p className="mt-1 break-all">{selectedRootPath || "Not selected yet"}</p>
+                  <div className="space-y-6">
+                    <div>
+                      <p className="font-medium text-foreground mb-1">Project root folder</p>
+                      <ProjectRootInlineSelector />
                     </div>
-                    <Button type="button" variant="outline" onClick={handleSelectRootPath} disabled={isSelectingPath}>
-                      {isSelectingPath ? "Opening..." : "Choose save folder"}
-                    </Button>
+                    <div className="p-4 bg-muted rounded-lg">
+                      <p className="text-sm text-muted-foreground">
+                        <strong>Commit storage:</strong> Commits will be saved to your appdata folder in a project specific folder, no manual configuration needed
+                      </p>
+                    </div>
                   </div>
                 )}
 
@@ -194,13 +146,21 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
                     <div className="text-sm text-muted-foreground">
                       <p>Name: {form.watch("name") || "-"}</p>
                       <p>Description: {form.watch("description") || "-"}</p>
-                      <p>Save folder: {selectedRootPath || "Will be selected on create"}</p>
                       <p>Members ({members.length}):</p>
                       <ul className="list-disc list-inside">
                         {members.map((m, i) => (
                           <li key={i}>{m.userId} - {m.role}</li>
                         ))}
                       </ul>
+                      <div className="mt-4">
+                        <p className="font-medium text-foreground">Project root folder</p>
+                        <ProjectRootInlineSelector />
+                      </div>
+                      <div className="mt-4 p-3 bg-muted rounded">
+                        <p className="text-xs text-muted-foreground">
+                          <strong>Commit storage:</strong> Auto managed per project in appdata
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -230,3 +190,46 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
 };
 
 export default ProjectSetupTabs;
+
+function ProjectRootInlineSelector() {
+  const [projectRoot, setProjectRoot] = useState<string | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setIsLoading(true);
+      try {
+        const root = await window.desktopControl?.getProjectRootDirectory();
+        if (!cancelled) setProjectRoot(root ?? null);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleSelect = async () => {
+    if (!window.desktopControl) return;
+    setIsSelecting(true);
+    try {
+      const selected = await window.desktopControl.selectProjectRootDirectory();
+      if (selected) setProjectRoot(selected);
+    } finally {
+      setIsSelecting(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 mt-1">
+      <span className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm font-mono break-all">
+        {isLoading ? "Loading..." : projectRoot || "Not selected yet"}
+      </span>
+      <Button type="button" variant="outline" onClick={handleSelect} disabled={isSelecting}>
+        {isSelecting ? "Opening..." : "Choose"}
+      </Button>
+    </div>
+  );
+}

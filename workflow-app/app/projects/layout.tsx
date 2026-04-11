@@ -7,7 +7,6 @@ import { UserButton } from "@/features/auth/components/user-button";
 import { CreateProjectDialog } from "@/features/projects/components/create-project-dialog";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { useState } from "react";
-import { CreateCredentialDialog } from '@/features/credentials/components/create-credential-dialog';
 import { useGetCurrentMemberByProject } from '@/features/members/api/use-get-current-member-by-project';
 import { useGetProject } from '@/features/projects/api/use-get-project-by-id';
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb';
@@ -19,8 +18,6 @@ interface AuthLayoutProps {
 const AuthLayout = ({children}: AuthLayoutProps) => {
     const pathname = usePathname();
     const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
-    const [isCredentialDialogOpen, setIsCredentialDialogOpen] = useState(false);
-    const [_, setCreatedProject] = useState(null);
 
     // fetch the member for the current user and current project
     const params = useParams();
@@ -65,25 +62,14 @@ const AuthLayout = ({children}: AuthLayoutProps) => {
                                         <span>Add project</span>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
-                                {projectId && member && !memberLoading && (
-                                    <SidebarMenuItem>
-                                        <SidebarMenuButton onClick={() => setIsCredentialDialogOpen(true)}>
-                                            <span>Add credential</span>
-                                        </SidebarMenuButton>
-                                    </SidebarMenuItem>
-                                )}
                             </SidebarMenu>
                         </SidebarGroupContent>
                     </SidebarGroup>
                 </SidebarContent>
             </Sidebar>
 
-            <CreateProjectDialog open={isProjectDialogOpen} onOpenChange={setIsProjectDialogOpen} onSuccess={(project) => setCreatedProject(project)}/>
+            <CreateProjectDialog open={isProjectDialogOpen} onOpenChange={setIsProjectDialogOpen} />
             
-            {projectId && member && (
-                <CreateCredentialDialog open={isCredentialDialogOpen} onOpenChange={setIsCredentialDialogOpen} projectId={projectId} memberId={member.id} />
-            )}
-
             <main className="flex-1">
                 <div className="fixed bottom-3 left-3 z-50">
                     <SidebarTrigger />

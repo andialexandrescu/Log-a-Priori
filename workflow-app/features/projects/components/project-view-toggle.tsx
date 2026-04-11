@@ -34,7 +34,7 @@ export function ProjectViewToggle({ projectId }: ProjectViewToggleProps) {
                     <MemberEventSelector projectId={projectId} />
                 ) : (
                     <div className="space-y-4">
-                        <KnowledgeGraphRootDirectory />
+                        <KnowledgeGraphRootDirectory projectId={projectId} />
                         <KnowledgeGraphCanvas projectId={projectId} />
                     </div>
                 )}

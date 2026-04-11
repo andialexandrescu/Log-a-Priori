@@ -10,7 +10,7 @@ export default async function KnowledgeGraphPage({ params }: KnowledgeGraphPageP
 
     return (
         <div className="space-y-4">
-            <KnowledgeGraphRootDirectory />
+            <KnowledgeGraphRootDirectory projectId={projectId} />
             <KnowledgeGraphCanvas projectId={projectId} />
         </div>
     );

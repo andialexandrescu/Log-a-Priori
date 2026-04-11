@@ -6,3 +6,5 @@ dist/
 .DS_Store
 setup.md
 .venv
+workflow-app/.config
+workflow-app/tools

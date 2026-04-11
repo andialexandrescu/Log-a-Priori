@@ -20,3 +20,15 @@ export interface TunnelUrls {
   nextPublicUrl: string;
   pocketbasePublicUrl: string;
 }
+
+export interface DesktopControlApi {
+  start: () => Promise<void>;
+  stop: () => Promise<{ ok: boolean }>;
+  getStatus: () => Promise<ServiceStatus[]>;
+  getProjectCommitStorageRootDirectory: (projectId: string) => Promise<string>;
+  selectProjectRootDirectory: () => Promise<string | null>;
+  getProjectRootDirectory: () => Promise<string | null>;
+  runKnowledgeGraphAnalysis: (projectId: string) => Promise<{ ok: boolean; message?: string; error?: string }>;
+  onStatus: (callback: (status: ServiceStatus) => void) => () => void;
+  onKnowledgeGraphAnalysisProgress: (callback: (data: { message: string; error?: boolean }) => void) => () => void;
+}

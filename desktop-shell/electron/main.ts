@@ -17,7 +17,9 @@ const electron = require("electron") as {
     };
     getAllWindows: () => unknown[];
   };
-  ipcMain: { handle: (channel: string, listener: (...args: unknown[]) => unknown) => void };
+  ipcMain: { 
+    handle: (channel: string, listener: (event: Record<string, unknown>, ...args: any[]) => any) => void;
+  };
   dialog: {
     showErrorBox: (title: string, content: string) => void;
     showOpenDialog: (options: {
@@ -39,8 +41,9 @@ const orchestrator = new AppOrchestrator();
 let isQuitting = false;
 let isStopping = false;
 
-interface DesktopSettings {
-  githubFilesRoot?: string;
+interface DesktopSettings { // per project roots: { projectId: rootPath }
+  commitStorageRoot?: string;
+  projectRoots?: Record<string, string>;
 }
 
 function getSettingsFilePath(): string {
@@ -52,7 +55,6 @@ function readSettings(): DesktopSettings {
   if (!fs.existsSync(settingsFilePath)) {
     return {};
   }
-
   try {
     const content = fs.readFileSync(settingsFilePath, "utf-8");
     const parsed = JSON.parse(content) as DesktopSettings;
@@ -68,28 +70,53 @@ function writeSettings(settings: DesktopSettings): void { // saves the file path
   fs.writeFileSync(settingsFilePath, JSON.stringify(settings, null, 2), "utf-8");
 }
 
-export async function selectRootDirectory(): Promise<string | null> { // called via the handler inside knowledge-graph-root-directory.tsx
-  const existingRootDirectory = getRootDirectory();
+// commits will be stored in appdata with projectId as the parent folder
+function getProjectCommitStorageAppDataPath(projectId: string): string {
+  const appDataPath = process.env.APPDATA || path.join(process.env.USERPROFILE || "", "AppData", "Roaming");
+  const projectPath = path.join(appDataPath, "log-a-priori-desktop-shell", projectId, "commits");
+  
+  fs.mkdirSync(projectPath, { recursive: true });
+  return projectPath;
+}
+
+export function getProjectCommitStorageRootDirectory(projectId: string): string {
+  return getProjectCommitStorageAppDataPath(projectId);
+}
+
+// project root/ location of the current working project will also be stored in appdata with projectId as the parent folder
+export async function selectProjectRootDirectory(projectId?: string): Promise<string | null> {
+  const existing = getProjectRootDirectory(projectId);
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory", "createDirectory"],
-    title: "Select directory for commit files",
-    defaultPath: existingRootDirectory ?? undefined
+    title: "Select project root directory",
+    defaultPath: existing ?? undefined
   });
-
   if (!result.canceled && result.filePaths.length > 0) {
     const selectedPath = result.filePaths[0];
     const settings = readSettings();
-    settings.githubFilesRoot = selectedPath;
+    if (!settings.projectRoots) {
+      settings.projectRoots = {};
+    }
+    
+    if (projectId) { // if projectId is provided, store per project the root project directory
+      settings.projectRoots[projectId] = selectedPath;
+    }
+
     writeSettings(settings);
     return selectedPath;
   }
-
   return null;
 }
 
-export function getRootDirectory(): string | null {
+export function getProjectRootDirectory(projectId?: string): string | null {
   const settings = readSettings();
-  return settings.githubFilesRoot || null;
+  if (!settings.projectRoots) {
+    return null;
+  }
+  if (projectId && settings.projectRoots[projectId]) {
+    return settings.projectRoots[projectId];
+  }
+  return null;
 }
 
 function createWindow() {
@@ -102,53 +129,82 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      partition: "persist:main"
     }
   });
 
   return window;
 }
 
+
 function registerIpc(): void {
-  ipcMain.handle("desktop:start", async () => {
-    return orchestrator.startAll();
+  ipcMain.handle("desktop:start", async () => orchestrator.startAll());
+  ipcMain.handle("desktop:stop", async () => { await orchestrator.stopAll(); return { ok: true }; });
+  ipcMain.handle("desktop:status", () => orchestrator.getStatuses());
+
+  ipcMain.handle("desktop:get-project-commit-storage-root-directory", async (event: Record<string, unknown>, projectId: string) => {
+    try {
+      return getProjectCommitStorageRootDirectory(projectId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return null;
+    }
   });
 
-  ipcMain.handle("desktop:stop", async () => {
-    await orchestrator.stopAll();
-    return { ok: true };
-  });
+  ipcMain.handle("desktop:select-project-root-directory", async (_, projectId?: string) => selectProjectRootDirectory(projectId));
+  ipcMain.handle("desktop:get-project-root-directory", (_, projectId?: string) => getProjectRootDirectory(projectId));
 
-  ipcMain.handle("desktop:status", () => {
-    return orchestrator.getStatuses();
-  });
+  ipcMain.handle("desktop:run-knowledge-graph-analysis", async (event: Record<string, unknown>, projectId: string) => {
+    try {
+      const projectRoot = getProjectRootDirectory(projectId);
+      if (!projectRoot) {
+        return { ok: false, error: "Project root not selected for this project. Please set project root first." };
+      }
 
-  ipcMain.handle("desktop:select-root-directory", async () => {
-    return selectRootDirectory();
-  });
+      // used imports here to avoid circular dependency issues
+      const { getRuntimePaths } = await import("./services/paths.js");
+      const { spawnProcess, waitForExit } = await import("./services/utils.js");
+      const runtimePaths = getRuntimePaths();
+      
+      const child = spawnProcess("node", [
+        "--max-old-space-size=4096",
+        path.join(runtimePaths.repoRoot, "workflow-app", "scripts", "analyze-recursion.js"), // running the script from this repo root
+        projectRoot,
+        "--full-project", // yet to fully port the per commit analysis idea
+        "--project-id",
+        projectId
+      ], { cwd: runtimePaths.repoRoot });
 
-  ipcMain.handle("desktop:get-root-directory", () => {
-    return getRootDirectory();
-  });
+      child.child.stdout?.on("data", (data: Buffer) => {
+        const line = data.toString().trim();
+        if (line) {
+          mainWindow?.webContents.send("desktop:kg-analysis-progress", { message: line });
+        }
+      });
 
-  ipcMain.handle("desktop:run-knowledge-graph", async () => {
-    const rootDirectory = getRootDirectory();
+      child.child.stderr?.on("data", (data: Buffer) => {
+        const line = data.toString().trim();
+        if (line) {
+          mainWindow?.webContents.send("desktop:kg-analysis-progress", { message: line, error: true });
+        }
+      });
 
-    return {
-      ok: true,
-      rootDirectory: rootDirectory ?? ""
-    };
+      const code = await waitForExit(child.child);
+      if (code === 0) {
+        return { ok: true, message: "Analysis completed successfully" };
+      } else {
+        return { ok: false, error: `Analysis failed with exit code ${code}` };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: message };
+    }
   });
 
   orchestrator.onStatus((status) => {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      return;
-    }
-
-    try {
-      mainWindow.webContents.send("desktop:status", status);
-    } catch {
-    }
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try { mainWindow.webContents.send("desktop:status", status); } catch {}
   });
 }
 
@@ -159,11 +215,11 @@ async function bootstrap(): Promise<void> {
 
   try {
     await orchestrator.startAll();
-    await mainWindow.loadURL("http://127.0.0.1:3000");
+    await mainWindow.loadURL("http://localhost:3000");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await dialog.showErrorBox("Startup failed", message);
-    await mainWindow.loadURL("data:text/html,<h2>Startup failed</h2><p>Check Electron logs for details.</p>");
+    await mainWindow.loadURL("data:text/html,<h2>Startup failed</h2><p>Check Electron logs for details</p>");
   }
 }
 
@@ -208,6 +264,6 @@ app.on("window-all-closed", () => {
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     mainWindow = createWindow();
-    void mainWindow.loadURL("http://127.0.0.1:3000");
+    void mainWindow.loadURL("http://localhost:3000");
   }
 });

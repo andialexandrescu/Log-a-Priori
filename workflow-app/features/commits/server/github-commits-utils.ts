@@ -105,6 +105,7 @@ type EnrichAndStoreInitialCommitsInput = {
     memberId: string;
     repository: string;
     token: string;
+    projectId?: string;
 };
 
 export type InitialBackfillResult = {
@@ -125,6 +126,7 @@ type SyncCommitFilesInput = {
     repository: string;
     token: string;
     commit: EnrichedCommitPayload;
+    projectId?: string;
 };
 
 const getFileChangeArrays = (payload: GithubCommitSummary) => {
@@ -184,9 +186,9 @@ export const enrichCommitWithDetails = async ({ owner, repoName, sha, summary, t
     };
 };
 
-export const syncCommitFilesToSelectedRoot = async ({ repository, token, commit }: SyncCommitFilesInput): Promise<void> => {
+export const syncCommitFilesToSelectedRoot = async ({ repository, token, commit, projectId }: SyncCommitFilesInput): Promise<void> => {
     const module = await import("./local-commit-file-sync");
-    await module.syncCommitFilesToSelectedRoot({ repository, token, commit });
+    await module.syncCommitFilesToSelectedRoot({ repository, token, commit, projectId });
 };
 
 export const hasCommitFilesExport = async (repository: string, sha: string): Promise<boolean> => {
@@ -195,7 +197,7 @@ export const hasCommitFilesExport = async (repository: string, sha: string): Pro
 };
 
 // the backfill orchestrator calling enrichCommitWithDetails for each GithubCommitSummary
-export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, token }: EnrichAndStoreInitialCommitsInput): Promise<InitialBackfillResult> => {
+export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, token, projectId }: EnrichAndStoreInitialCommitsInput): Promise<InitialBackfillResult> => {
     const [owner, repoName] = repository.split("/");
 
     const githubCommits: GithubCommitSummary[] = [];
@@ -260,6 +262,7 @@ export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, t
                 repository,
                 token,
                 commit: normalizedCommit,
+                projectId,
             });
         } catch (error) {
             console.error(`Failed to export initial backfill commit files for ${sha}:`, error);

@@ -22,6 +22,8 @@ async function collectFilesRecursive(rootPath) { // called by collectTypeScriptF
     const output = [];
     const stack = [rootPath]; // owner/repo/commits/commit_sha/added or modified or removed
 
+    const excludeDirs = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.venv', '.pytest_cache', '.vscode', '__pycache__']); // common directories to exclude for full project analysis
+
     while (stack.length > 0) { // dfs
         const current = stack.pop();
         if (!current) {
@@ -37,8 +39,10 @@ async function collectFilesRecursive(rootPath) { // called by collectTypeScriptF
 
         for (const entry of entries) {
             const absolutePath = path.join(current, entry.name); // absoulte path for a subdir inside added/ modified/ removed
-            if (entry.isDirectory()) {
-                stack.push(absolutePath); // queues the folder for further file absolute path extraction for output
+            if (entry.isDirectory()) { // skipping excluded directories
+                if (!excludeDirs.has(entry.name)) {
+                    stack.push(absolutePath); // queues the folder for further file absolute path extraction for output
+                }
             } else if (entry.isFile()) {
                 output.push(absolutePath);
             }
@@ -67,6 +71,18 @@ async function collectTypeScriptFiles(commitDirectory) {
         }
     }
 
+    return files;
+}
+
+async function collectTypeScriptFilesFromProject(projectRoot) {
+    const files = [];
+    const candidates = await collectFilesRecursive(projectRoot);
+    for (const filePath of candidates) {
+        const ext = path.extname(filePath).toLowerCase();
+        if (TS_EXTENSIONS.has(ext)) {
+            files.push(filePath);
+        }
+    }
     return files;
 }
 
@@ -188,19 +204,22 @@ function buildEntityContext(project, commitDirectory, sha) { // only collects fu
             context.functionsByFile.get(loc.filePath).push(entity);
         };
 
-        for (const fn of sourceFile.getFunctions()) { // top-level functions
+        const topLevelFuncs = sourceFile.getFunctions();
+        for (const fn of topLevelFuncs) { // top level functions
             const fnName = getFunctionDisplayName(fn);
             addFunction(fn, "function", fnName, fn.getName() || fnName);
         }
 
-        for (const classNode of sourceFile.getClasses()) { // methods inside classes
+        const classNodes = sourceFile.getClasses();
+        for (const classNode of classNodes) { // methods inside classes
             for (const method of classNode.getMethods()) {
                 const methodName = getFunctionDisplayName(method);
                 addFunction(method, "method", methodName, method.getName());
             }
         }
 
-        for (const variableDecl of sourceFile.getVariableDeclarations()) { // arrow functions / function expressions assigned to variables
+        const varDecls = sourceFile.getVariableDeclarations();
+        for (const variableDecl of varDecls) { // arrow functions/ function expressions assigned to variables
             const initializer = variableDecl.getInitializer();
             if (!initializer) continue;
             if (!Node.isArrowFunction(initializer) && !Node.isFunctionExpression(initializer)) continue;
@@ -219,22 +238,24 @@ function buildEntityContext(project, commitDirectory, sha) { // only collects fu
 function resolveCallTarget(callExpression, context) { // resolves a call expression to a function entity
     const expr = callExpression.getExpression();
     const symbol = expr.getSymbol() || expr.getType().getSymbol();
-    if (!symbol) return null;
+    
+    if (symbol) { // only if we have a symbol
+        for (const decl of symbol.getDeclarations()) { // first try by declaration key
+            const direct = context.functionByDeclarationKey.get(declarationKey(decl));
+            if (direct) return direct;
 
-    for (const decl of symbol.getDeclarations()) { // first try by declaration key
-        const direct = context.functionByDeclarationKey.get(declarationKey(decl));
-        if (direct) return direct;
-
-        if (Node.isVariableDeclaration(decl)) { // if it's a variable declaration pointing to a function, get the initializer
-            const initializer = decl.getInitializer();
-            if (initializer && (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer))) {
-                const resolved = context.functionByDeclarationKey.get(declarationKey(initializer));
-                if (resolved) return resolved; // context.functionByDeclarationKey.get("src/utils/helper.ts:200") = entity
+            if (Node.isVariableDeclaration(decl)) { // if it's a variable declaration pointing to a function, get the initializer
+                const initializer = decl.getInitializer();
+                if (initializer && (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer))) {
+                    const resolved = context.functionByDeclarationKey.get(declarationKey(initializer));
+                    if (resolved) return resolved; // context.functionByDeclarationKey.get("src/utils/helper.ts:200") = entity
+                }
             }
         }
     }
 
-    if (Node.isIdentifier(expr)) { // fallback
+    if (Node.isIdentifier(expr)) { // fallback: try by name (works even when symbol resolution fails)
+        // for CommonJs sometimes symbol resolution fails - name matching
         const byName = context.functionsBySimpleName.get(expr.getText()) || [];
         if (byName.length === 1) {
             return byName[0];
@@ -279,7 +300,121 @@ function extractCallEdges(context, edges) { // extracts CALLS edges between func
     }
 }
 
-function extractUsesEdges(context, edges) { // extracts jsx/component usage as CALLS edges
+function extractUsesEdges(context, edges) { // extracts function references (middleware, callbacks...)
+    const dedupe = new Set();
+
+    for (const func of context.functions) {
+        const identifiers = func.node.getDescendantsOfKind(SyntaxKind.Identifier);
+        
+        for (const ident of identifiers) {
+            const name = ident.getText();
+            if (['if', 'else', 'for', 'while', 'return', 'const', 'let', 'var', 'function', 'async', 'await'].includes(name)) {
+                continue;
+            }
+
+            const parent = ident.getParent();
+            if (parent && Node.isVariableDeclaration(parent) && parent.getName() === name) {
+                continue; // skipping variable declarations on the left side of assignment
+            }
+
+            const targetFuncs = context.functionsBySimpleName.get(name) || []; // name matching
+            if (targetFuncs.length === 0) continue;
+
+            for (const targetFunc of targetFuncs) {
+                if (targetFunc.id === func.id) continue; // self references
+
+                const loc = getLocation(ident);
+                const funcFilePath = func.filePath.split(path.sep).join("/");
+                const targetFilePath = targetFunc.filePath.split(path.sep).join("/");
+                const isCrossFile = funcFilePath !== targetFilePath;
+
+                const edge = {
+                    kind: "USES",
+                    from: func.id,
+                    to: targetFunc.id,
+                    label: name,
+                    filePath: loc.filePath,
+                    line: loc.line,
+                    column: loc.column,
+                    resolved: true,
+                    scope: isCrossFile ? "cross-file" : "in-file",
+                    directed: true,
+                };
+
+                // deduplicate - same usage per location
+                const key = `${edge.kind}|${edge.from}|${edge.to}|${edge.line}|${edge.column}`;
+                if (dedupe.has(key)) continue;
+                dedupe.add(key);
+                edges.push(edge);
+            }
+        }
+    }
+}
+
+function extractModuleImportEdges(context, project, edges) { // for CommonJS when module imports and uses a function from another module
+    const dedupe = new Set();
+    let foundEdges = 0;
+
+    for (const sourceFile of project.getSourceFiles()) {
+        const filePath = sourceFile.getFilePath();
+        
+        const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression); // require() calls
+        for (const call of calls) {
+            const expr = call.getExpression();
+            if (!Node.isIdentifier(expr) || expr.getText() !== 'require') continue;
+
+            let parent = call.getParent(); // the identifier the require is assigned to
+            let requiredName = null;
+
+            // const name = require('...')
+            if (parent && Node.isVariableDeclaration(parent)) {
+                requiredName = parent.getName();
+                parent = parent.getParent(); // get the parent of the declaration
+            }
+            // const { name } = require('...') (destructuring)
+            else if (parent && Node.isCallExpression(parent)) {
+                parent = parent.getParent();
+                if (parent && Node.isVariableDeclaration(parent)) {
+                    requiredName = parent.getName();
+                }
+            }
+
+            if (!requiredName) continue;
+
+            const identifiers = sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).filter(id => id.getText() === requiredName); // references of this imported name in the file
+            
+            for (const usage of identifiers) {
+                const idParent = usage.getParent();
+                if (Node.isVariableDeclaration(idParent) && idParent.getName() === requiredName) continue;
+
+                const targetFuncs = context.functionsBySimpleName.get(requiredName) || []; // name matching
+                for (const targetFunc of targetFuncs) {
+                    const loc = getLocation(usage);
+                    const edge = {
+                        kind: "USES",
+                        from: `module:${filePath}`,
+                        to: targetFunc.id,
+                        label: requiredName,
+                        filePath: loc.filePath,
+                        line: loc.line,
+                        column: loc.column,
+                        resolved: true,
+                        scope: filePath === targetFunc.filePath ? "in-file" : "cross-file",
+                        directed: true,
+                    };
+
+                    const key = `${edge.kind}|${edge.from}|${edge.to}|${edge.line}|${edge.column}`;
+                    if (dedupe.has(key)) continue;
+                    dedupe.add(key);
+                    edges.push(edge);
+                    foundEdges++;
+                }
+            }
+        }
+    }
+}
+
+function extractJsxComponentUsesEdges(context, edges) { // original impl: extracts jsx/component usage as USES edges
     const dedupe = new Set();
 
     for (const func of context.functions) {
@@ -335,7 +470,7 @@ function extractUsesEdges(context, edges) { // extracts jsx/component usage as C
     }
 }
 
-
+// yet to integrate
 async function analyzeCommitDirectory(commitDirectory) { // analyzes a single commit directory – functions and call edges
     // parses added, modified, and removed so that edges can reference functions from any operation directory
 
@@ -351,7 +486,9 @@ async function analyzeCommitDirectory(commitDirectory) { // analyzes a single co
 
     const edges = [];
     extractCallEdges(context, edges); // includes both cross-file and in-file
-    extractUsesEdges(context, edges); // jsx/ component usage edges considered part of CALLS edges
+    extractUsesEdges(context, edges); // function references (middleware, callbacks)
+    extractModuleImportEdges(context, project, edges); // CommonJS module imports/ uses
+    extractJsxComponentUsesEdges(context, edges); // jsx/ component usage edges
 
     const functions = context.functions.map(f => {
         const { node, ...rest } = f;
@@ -412,4 +549,89 @@ async function analyzeCommitDirectory(commitDirectory) { // analyzes a single co
     };
 }
 
-module.exports = { analyzeCommitDirectory };
+async function analyzeFullProject(projectRoot) { // analyzes the entire project directory – functions and call edges
+    const project = createProject();
+
+    const sourceFiles = await collectTypeScriptFilesFromProject(projectRoot);
+    
+    for (const file of sourceFiles) {
+        try {
+            project.addSourceFileAtPath(file);
+        } catch (err) {
+            console.error(`[ERROR] Failed to parse ${file}: ${err.message}`);
+        }
+    }
+
+    const sha = "full-project";
+    const context = buildEntityContext(project, projectRoot, sha);
+
+    const edges = [];
+    extractCallEdges(context, edges); // includes both cross-file and in-file
+    extractUsesEdges(context, edges); // function references (middleware, callbacks)
+    extractModuleImportEdges(context, project, edges); // CommonJS module imports/uses
+    extractJsxComponentUsesEdges(context, edges); // jsx/ component usage edges
+
+    const functions = context.functions.map(f => {
+        const { node, ...rest } = f;
+        return { ...rest, type: "entity" }; // removes node references and adds required 'type' field
+    });
+
+    const callEdges = edges.filter(e => e.kind === "CALLS").length;
+    const crossFileEdges = edges.filter(e => e.scope === "cross-file").length;
+    const inFileEdges = edges.filter(e => e.scope === "in-file").length;
+
+    const getProjectRelativePath = (filePath) => {
+        return path.relative(projectRoot, filePath).split(path.sep).join("/");
+    };
+
+    const repoFiles = sourceFiles.map(getProjectRelativePath).sort((a, b) => a.localeCompare(b));
+
+    console.log(`\n[full-project] analyzed files (${repoFiles.length})`);
+
+    const relationCounts = new Map(); // edge and number of times the edge appears
+    for (const edge of edges) {
+        const fromFn = context.functionById.get(edge.from); // caller
+        const toFn = context.functionById.get(edge.to); // callee
+        if (!fromFn || !toFn) {
+            continue;
+        }
+
+        const fromLabel = `${fromFn.name} [${fromFn.repoRelativePath}]`;
+        const toLabel = `${toFn.name} [${toFn.repoRelativePath}]`;
+        const scope = edge.scope || "unknown";
+        const key = `${scope}|${edge.kind}|${fromLabel}|${toLabel}`;
+        relationCounts.set(key, (relationCounts.get(key) || 0) + 1);
+    }
+
+    const sortedRelations = [...relationCounts.entries()].sort((a, b) => {
+        if (b[1] !== a[1]) {
+            return b[1] - a[1]; // highest count
+        }
+        return a[0].localeCompare(b[0]); // alphabetical
+    });
+
+    console.log(`[full-project] function relationships (${sortedRelations.length})`);
+    if (sortedRelations.length === 0) {
+        console.log("  - none");
+    } else {
+        for (const [key, count] of sortedRelations) {
+            const [scope, kind, fromLabel, toLabel] = key.split("|");
+            console.log(`\t- ${fromLabel} -${kind}/${scope}-> ${toLabel}: ${count} repetitions`);
+        }
+    }
+
+    return {
+        sha,
+        projectRoot,
+        filesAnalyzed: sourceFiles.length,
+        functionCount: functions.length,
+        callEdges,
+        totalEdges: edges.length,
+        crossFileEdges,
+        inFileEdges,
+        functions,
+        edges,
+    };
+}
+
+module.exports = { analyzeCommitDirectory, analyzeFullProject };

@@ -6,6 +6,8 @@
     "rootDir": ".",
     "sourceMap": true,
     "strict": false,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "lib": ["es2020"],
+    "types": ["node"]
   }
 }

@@ -1,13 +1,15 @@
 import type { ServiceStatus } from "./types";
 
+type AnalysisProgressData = { message: string; error?: boolean };
+
 const electron = require("electron") as {
   contextBridge: {
     exposeInMainWorld: (key: string, api: Record<string, unknown>) => void;
   };
   ipcRenderer: {
     invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
-    on: (channel: string, listener: (event: unknown, payload: ServiceStatus) => void) => void;
-    removeListener: (channel: string, listener: (event: unknown, payload: ServiceStatus) => void) => void;
+    on: (channel: string, listener: (event: unknown, payload: unknown) => void) => void;
+    removeListener: (channel: string, listener: (event: unknown, payload: unknown) => void) => void;
   };
 };
 
@@ -18,13 +20,25 @@ contextBridge.exposeInMainWorld("desktopControl", {
   start: () => ipcRenderer.invoke("desktop:start"),
   stop: () => ipcRenderer.invoke("desktop:stop"),
   getStatus: () => ipcRenderer.invoke("desktop:status") as Promise<ServiceStatus[]>,
-  selectRootDirectory: () => ipcRenderer.invoke("desktop:select-root-directory") as Promise<string | null>,
-  getRootDirectory: () => ipcRenderer.invoke("desktop:get-root-directory") as Promise<string | null>,
-  runKnowledgeGraph: () =>
-    ipcRenderer.invoke("desktop:run-knowledge-graph") as Promise<{ ok: boolean; rootDirectory: string }>,
+
+  getProjectCommitStorageRootDirectory: (projectId: string) => 
+    ipcRenderer.invoke("desktop:get-project-commit-storage-root-directory", projectId) as Promise<string>,
+
+  selectProjectRootDirectory: (projectId?: string) => ipcRenderer.invoke("desktop:select-project-root-directory", projectId) as Promise<string | null>,
+  getProjectRootDirectory: (projectId?: string) => ipcRenderer.invoke("desktop:get-project-root-directory", projectId) as Promise<string | null>,
+
+  runKnowledgeGraphAnalysis: (projectId: string) =>
+    ipcRenderer.invoke("desktop:run-knowledge-graph-analysis", projectId) as Promise<{ ok: boolean; message?: string; error?: string }>,
+
   onStatus: (callback: (status: ServiceStatus) => void) => {
     const listener = (_event: unknown, status: ServiceStatus) => callback(status);
-    ipcRenderer.on("desktop:status", listener);
-    return () => ipcRenderer.removeListener("desktop:status", listener);
+    ipcRenderer.on("desktop:status", listener as (event: unknown, payload: unknown) => void);
+    return () => ipcRenderer.removeListener("desktop:status", listener as (event: unknown, payload: unknown) => void);
+  },
+
+  onKnowledgeGraphAnalysisProgress: (callback: (data: AnalysisProgressData) => void) => {
+    const listener = (_event: unknown, data: AnalysisProgressData) => callback(data);
+    ipcRenderer.on("desktop:kg-analysis-progress", listener as (event: unknown, payload: unknown) => void);
+    return () => ipcRenderer.removeListener("desktop:kg-analysis-progress", listener as (event: unknown, payload: unknown) => void);
   }
 });

@@ -37,9 +37,14 @@ async function getSelectedRootDirectory(): Promise<string | null> {
 }
 
 async function resolveGraphFilePath(pb: any, projectId: string): Promise<string> {
-    const fallbackPath = path.join(process.cwd(), "analysis", "ts-code-graph.json");
-    const rootDirectory = await getSelectedRootDirectory();
+    try {
+        const projectAppDataPath = getProjectAppdataPath(projectId); // project specific appdata folder
+        await fs.access(projectAppDataPath);
+        return projectAppDataPath;
+    } catch {
+    }
 
+    const rootDirectory = await getSelectedRootDirectory(); // selected root directory from desktop shell settings
     if (rootDirectory) {
         const candidate = path.join(rootDirectory, "analysis", "ts-code-graph.json")
         
@@ -47,11 +52,18 @@ async function resolveGraphFilePath(pb: any, projectId: string): Promise<string>
             await fs.access(candidate);
             return candidate;
         } catch {
-            return fallbackPath;
         }
     }
     
-    return fallbackPath;
+    return path.join(process.cwd(), "analysis", "ts-code-graph.json");
+}
+
+function getProjectAppdataPath(projectId: string): string {
+    const appData = process.env.APPDATA?.trim();
+    const baseDir = appData 
+        ? path.join(appData, "log-a-priori-desktop-shell", projectId)
+        : path.join(os.homedir(), "AppData", "Roaming", "log-a-priori-desktop-shell", projectId);
+    return path.join(baseDir, "analysis", "ts-code-graph.json");
 }
 
 const knowledgeGraphApp = new Hono().get("/", sessionMiddleware, async (c) => {

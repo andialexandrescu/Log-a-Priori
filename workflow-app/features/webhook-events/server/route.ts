@@ -99,6 +99,7 @@ const webhookEventsApp = new Hono()
                             repository: repo,
                             token: credential.api_keys.token,
                             commit: normalizedCommitPayload as EnrichedCommitPayload,
+                            projectId,
                         });
                     } catch (error) {
                         console.error(`Failed to export webhook commit files for ${commit.id}:`, error);
