@@ -11,7 +11,6 @@ export type UpdateCredentialInput = {
     projectId: RequestType["param"]["projectId"];
     memberId: RequestType["param"]["memberId"];
     credentialId: RequestType["param"]["credentialId"];
-    name: RequestType["json"]["name"];
     api_keys: RequestType["json"]["api_keys"];
     api_limitations?: RequestType["json"]["api_limitations"];
 };

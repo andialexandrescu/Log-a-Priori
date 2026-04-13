@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,8 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
     const [expandedEventIds, setExpandedEventIds] = useState<string[]>([]);
     const [isRefreshingCommits, setIsRefreshingCommits] = useState(false);
     const [syncSummary, setSyncSummary] = useState<string[]>([]);
+    const hasInitialRefreshed = useRef(false);
+    const currentMemberRef = useRef<string | null>(null);
 
     useEffect(() => { // for retrieving the initial 'create credential' commits backfill notice
         if (typeof window === "undefined") {
@@ -94,7 +96,7 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
                 : "max-h-0 opacity-0 -mt-4"
         );
 
-    const refreshCommits = useCallback(async (options?: { silent?: boolean; auto?: boolean }) => {
+    const refreshCommits = useCallback(async (options?: { silent?: boolean; auto?: boolean; isMount?: boolean }) => {
         if (safeEvents.length === 0) {
             return;
         }
@@ -115,28 +117,32 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
             const nextSyncSummary: string[] = [];
 
             for (const repo of repositories) {
-                const result = await fetchGetCommits({ projectId, memberId, repo });
+                const result = await fetchGetCommits({ projectId, memberId, repo }, options?.isMount === true); // using refresh=true only on initial mount, all other refreshes use refresh=false
 
-                const backfill = result.backfill as {
-                    fetchedFromGithub?: number;
-                    skippedExisting?: number;
-                } | undefined;
-                const fetched = backfill?.fetchedFromGithub ?? 0;
-                const skippedExisting = backfill?.skippedExisting ?? 0;
-                nextSyncSummary.push(
-                    `${options?.auto ? "Auto" : "Current 'update commit'"} backfill action: fetched ${fetched} commits (skipped existing commits: ${skippedExisting})`
-                );
+                if (result.refreshInfo) { // checking for refreshInfo (new commits found)
+                    const info = result.refreshInfo;
+                    if (info.newCommitsFound > 0) {
+                        nextSyncSummary.push(
+                            `Found ${info.newCommitsFound} new commit${info.newCommitsFound > 1 ? 's' : ''} (${info.previousTotal} => ${info.currentTotal})`
+                        );
+                        if (!options?.silent && !options?.auto) {
+                            toast.success(`Found ${info.newCommitsFound} new commit${info.newCommitsFound > 1 ? 's' : ''}`);
+                        }
+                    } else if (options?.isMount) {
+                        nextSyncSummary.push(`All commits synced (${info.currentTotal} total)`);
+                    }
+                }
             }
 
             setSyncSummary(nextSyncSummary);
             await queryClient.invalidateQueries({
                 queryKey: ["projects", projectId, "members", memberId, "commits"],
             });
-            if (!options?.silent) {
+            if (!options?.silent && !options?.isMount) {
                 toast.success("Commits refreshed");
             }
         } catch (error) {
-            if (!options?.silent) {
+            if (!options?.silent && !options?.auto) {
                 toast.error(error instanceof Error ? error.message : "Failed to refresh commits");
             }
         } finally {
@@ -161,6 +167,20 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
             window.clearInterval(intervalId);
         };
     }, [isRefreshingCommits, refreshCommits, safeEvents]);
+
+    useEffect(() => {
+        if (currentMemberRef.current !== memberId) { // detecting when member changes and reset the refresh flag
+            currentMemberRef.current = memberId;
+            hasInitialRefreshed.current = false; // resetting for new member
+        }
+    }, [memberId]);
+
+    useEffect(() => { // triggering initial refresh when component first mounts for this member/project
+        if (safeEvents.length > 0 && !hasInitialRefreshed.current) {
+            hasInitialRefreshed.current = true;
+            void refreshCommits({ silent: false, isMount: true }); // // showing the refreshing state in the ui, not silent so user sees the button change
+        }
+    }, [safeEvents.length, memberId, refreshCommits]);
 
     if (isLoading) {
         return <div>Loading events...</div>;

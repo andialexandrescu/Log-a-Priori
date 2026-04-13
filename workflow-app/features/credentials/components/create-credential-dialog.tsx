@@ -35,7 +35,6 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId,
     const form = useForm<z.output<typeof createCredentialsSchema>>({
         resolver: zodResolver(createCredentialsSchema),
         defaultValues: {
-            name: "",
             api_keys: {
                 token: "",
                 owner: "",
@@ -48,7 +47,6 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId,
     useEffect(() => {
         if (mode === "edit" && existingCredential && open) { // loading existing credential data
             form.reset({
-                name: existingCredential.name || "",
                 api_keys: {
                     token: "",
                     owner: existingCredential.api_keys?.owner || "",
@@ -58,7 +56,6 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId,
             });
         } else if (mode === "create" && open) {
             form.reset({
-                name: "",
                 api_keys: {
                     token: "",
                     owner: "",

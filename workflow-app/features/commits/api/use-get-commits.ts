@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { InferRequestType } from "hono";
 import { client } from "@/lib/rpc";
 import { toast } from "sonner";
@@ -27,13 +27,22 @@ export type GetCommitsResult = {
         created?: number;
         updated?: number;
     };
+    refreshInfo?: {
+        newCommitsFound: number;
+        previousTotal: number;
+        currentTotal: number;
+        fetched: number;
+        created: number;
+        skipped: number;
+        pagesFetched: number;
+    };
 };
 
-export const fetchGetCommits = async ({ projectId, memberId, repo }: NormalizedGetCommitsInput): Promise<GetCommitsResult> => {
+export const fetchGetCommits = async ({ projectId, memberId, repo }: NormalizedGetCommitsInput, refresh: boolean = false): Promise<GetCommitsResult> => {
     const commitsEndpoint = client.api.projects[":projectId"].members[":memberId"].commits as any;
     const res = await commitsEndpoint.$get({
         param: { projectId, memberId },
-        query: { repo },
+        query: { repo, refresh: refresh ? "true" : "false" },
     });
 
     const json = await res.json();
@@ -51,6 +60,7 @@ export const fetchGetCommits = async ({ projectId, memberId, repo }: NormalizedG
         data: json.data,
         total: "total" in json ? json.total : undefined,
         backfill: "backfill" in json ? json.backfill : undefined,
+        refreshInfo: "refreshInfo" in json ? json.refreshInfo : undefined,
     };
 };
 
@@ -68,4 +78,84 @@ export const useGetCommits = ({ projectId, memberId, repo }: NormalizedGetCommit
         },
     });
     return query;
+};
+
+export const useRefreshCommits = () => {
+    const queryClient = useQueryClient();
+
+    const refreshCommits = async ({ projectId, memberId, repo }: NormalizedGetCommitsInput) => {
+        try {
+            const result = await fetchGetCommits({ projectId, memberId, repo }, true);
+            
+            await queryClient.invalidateQueries({
+                queryKey: ["projects", projectId, "members", memberId, "commits", repo],
+            }); // invalidating the main query to refetch
+
+            if (result.refreshInfo && result.refreshInfo.newCommitsFound > 0) {
+                toast.success(`Found ${result.refreshInfo.newCommitsFound} new commit${result.refreshInfo.newCommitsFound > 1 ? 's' : ''}!`);
+            }
+
+            return result;
+        } catch (error) {
+            console.error("Failed to refresh commits:", error);
+            return null;
+        }
+    };
+
+    return { refreshCommits };
+};
+
+export const useRefreshAllCommits = () => {
+    const queryClient = useQueryClient();
+
+    const refreshAllMemberCommits = async (projectId: string, members: Array<{ id: string }>) => { // for each member, there's no need to get their credentials and refresh but since we don't have credentials data in members, letting the webhook-events endpoint handle finding their repos is a solution
+        try {
+            const refreshPromises: Promise<any>[] = [];
+
+            for (const member of members) { // fetch credentials for this member to get the repo
+                try {
+                    const credResponse = await fetch(`/api/projects/${projectId}/members/${member.id}/credentials`);
+                    if (credResponse.ok) {
+                        const { data: credential } = await credResponse.json();
+                        if (credential?.api_keys?.owner && credential?.api_keys?.repo) {
+                            const repo = `${credential.api_keys.owner}/${credential.api_keys.repo}`;
+                            refreshPromises.push(
+                                fetchGetCommits({ projectId, memberId: member.id, repo }, true)
+                            );
+                        }
+                    }
+                } catch (error) {
+                    console.error(`Failed to get credentials for member ${member.id}:`, error);
+                }
+            }
+
+            if (refreshPromises.length === 0) {
+                return [];
+            }
+
+            const results = await Promise.allSettled(refreshPromises);
+            
+            await queryClient.invalidateQueries({
+                queryKey: ["projects", projectId, "members"],
+            });
+
+            let totalNewCommits = 0;
+            results.forEach(result => {
+                if (result.status === "fulfilled" && result.value?.refreshInfo?.newCommitsFound) {
+                    totalNewCommits += result.value.refreshInfo.newCommitsFound;
+                }
+            }); // counting new commits found
+
+            if (totalNewCommits > 0) {
+                toast.success(`Found ${totalNewCommits} new commit${totalNewCommits > 1 ? 's' : ''}`);
+            }
+
+            return results;
+        } catch (error) {
+            console.error("Failed to refresh all commits:", error);
+            return [];
+        }
+    };
+
+    return { refreshAllMemberCommits };
 };

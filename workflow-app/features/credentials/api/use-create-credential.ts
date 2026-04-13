@@ -10,7 +10,6 @@ type RequestType = InferRequestType<(typeof client.api.projects)[":projectId"]["
 export type CreateCredentialInput = {
     projectId: RequestType["param"]["projectId"];
     memberId: RequestType["param"]["memberId"];
-    name: RequestType["json"]["name"];
     api_keys: RequestType["json"]["api_keys"];
     api_limitations?: RequestType["json"]["api_limitations"];
 };

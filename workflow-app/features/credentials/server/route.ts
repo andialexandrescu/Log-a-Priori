@@ -43,23 +43,30 @@ const credentialsApp = new Hono()
         const memberId = c.req.param("memberId");
         const data = c.req.valid("json");
 
+        console.log(`[CREDENTIALS POST] Starting credential creation for member=${memberId}`);
+
         if (!account) {
+            console.log(`[CREDENTIALS POST] No account found`);
             return c.json({ error: "Unauthorized" }, 401);
         }
 
         if (!memberId) {
+            console.log(`[CREDENTIALS POST] No memberId provided`);
             return c.json({ error: "Member is required" }, 400);
         }
 
         try {
+            console.log(`[CREDENTIALS POST] Fetching member ${memberId}`);
             const member = await pb.collection("members").getOne(memberId, { expand: "user,project" }); // the auth user is the member
+            console.log(`[CREDENTIALS POST] Member found, checking ownership`);
             if (member.user !== account.id) {
+                console.log(`[CREDENTIALS POST] Member not owned by account`);
                 return c.json({ error: "You do not have access to this member's credentials" }, 403);
             }
 
+            console.log(`[CREDENTIALS POST] Creating credential record in DB`);
             const webhookSecret = randomBytes(32).toString('hex');
             const credentials = await pb.collection("credentials").create({
-                name: data.name,
                 member: memberId,
                 api_keys: {
                     ...data.api_keys,
@@ -67,9 +74,11 @@ const credentialsApp = new Hono()
                 },
                 api_limitations: data.api_limitations,
             });
+            console.log(`[CREDENTIALS POST] Credential created: ${credentials.id}`);
 
             const { token, owner, repo } = data.api_keys;
             const webhookUrl = process.env.AZURE_FUNCTION_URL;
+            console.log(`[CREDENTIALS POST] WebhookUrl: ${webhookUrl}`);
             
             if (!webhookUrl) {
                 throw new Error("AZURE_FUNCTION_URL is not configured");
@@ -118,6 +127,7 @@ const credentialsApp = new Hono()
             });
             
             if (!githubRes.ok) { // if the creation fails, the credential should be deleted
+                console.log(`GitHub webhook creation failed: ${githubRes.status}`);
                 const payload = await parseGithubErrorPayload(githubRes);
                 console.error('GitHub webhook creation failed:', payload);
                 await pb.collection("credentials").delete(credentials.id);
@@ -162,9 +172,12 @@ const credentialsApp = new Hono()
                         token,
                         projectId,
                     });
+                    console.log(`Initial backfill completed:`, initialBackfill);
                 } catch (backfillError) {
                     console.error("Initial commit enrichment failed:", backfillError);
                 }
+            } else {
+                console.warn(`No projectId found in member expand, skipping initial backfill`);
             }
 
             return c.json({ data: credentials, initialBackfill }, 201);
@@ -219,7 +232,6 @@ const credentialsApp = new Hono()
             }
 
             const updated = await pb.collection("credentials").update(credentialId, {
-                name: data.name,
                 api_keys: {
                     ...credential.api_keys,
                     token: data.api_keys.token,

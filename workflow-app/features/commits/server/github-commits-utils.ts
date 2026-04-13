@@ -199,6 +199,7 @@ export const hasCommitFilesExport = async (repository: string, sha: string): Pro
 // the backfill orchestrator calling enrichCommitWithDetails for each GithubCommitSummary
 export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, token, projectId }: EnrichAndStoreInitialCommitsInput): Promise<InitialBackfillResult> => {
     const [owner, repoName] = repository.split("/");
+    console.log(`Starting initial backfill for ${repository}, projectId=${projectId}, memberId=${memberId}`);
 
     const githubCommits: GithubCommitSummary[] = [];
 
@@ -210,13 +211,17 @@ export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, t
         if (repoRes.ok) {
             const repoData = await repoRes.json();
             defaultBranch = repoData?.default_branch || defaultBranch;
+            console.log(`Fetched repo info, default branch=${defaultBranch}`);
         }
     } catch {
         defaultBranch = "unknown";
     }
 
     let nextUrl: string | null = `https://api.github.com/repos/${owner}/${repoName}/commits?per_page=100&page=1`;
+    let pageCount = 0;
     while (nextUrl) {
+        pageCount++;
+        console.log(`Fetching commits page ${pageCount} from GitHub`);
         const commitsRes = await fetch(nextUrl, { headers: githubHeaders(token) });
 
         if (!commitsRes.ok) {
@@ -228,10 +233,12 @@ export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, t
             break;
         }
 
+        console.log(`Page ${pageCount} has ${(commitsPage as GithubCommitSummary[]).length} commits`);
         githubCommits.push(...(commitsPage as GithubCommitSummary[])); // initial credential backfill loads all previous commits
         nextUrl = getNextLinkUrl(commitsRes.headers.get("link"));
     }
 
+    console.log(`Total commits fetched from GitHub: ${githubCommits.length}`);
     let createdCount = 0;
 
     for (const commitSummary of githubCommits) {
@@ -250,12 +257,24 @@ export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, t
         });
 
         // on initial credential creation the webhook_events table is empty for that member+repository combination, so there's no possibility of existing records to update
-        await pb.collection("webhook_events").create({
-            member: memberId,
-            event_type: "commit",
-            repository,
-            payload: normalizedCommit,
-        });
+        try {
+            const createPayload: any = {
+                member: memberId,
+                event_type: "commit",
+                repository,
+                payload: normalizedCommit,
+            };
+            
+            if (projectId) {
+                createPayload.project = projectId;
+            }
+            
+            const created = await pb.collection("webhook_events").create(createPayload);
+            console.log(`Created webhook event for commit ${sha.substring(0, 7)}, record id=${created.id}`);
+        } catch (createError) {
+            console.error(`Failed to create webhook event for ${sha}:`, createError);
+            throw createError;
+        }
 
         try {
             await syncCommitFilesToSelectedRoot({
@@ -271,6 +290,7 @@ export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, t
         createdCount += 1;
     }
 
+    console.log(`Initial backfill complete: created ${createdCount} webhook events`);
     return {
         fetchedFromGithub: githubCommits.length,
         created: createdCount,

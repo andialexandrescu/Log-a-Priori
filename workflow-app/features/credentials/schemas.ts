@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 export const createCredentialsSchema = z.object({
-    name: z.string().min(1, "Platform name is required"),
     api_keys: z.object({
         token: z.string().min(1, "GitHub token is required"),
         owner: z.string().min(1, "Repository owner is required"),
