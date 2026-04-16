@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { randomBytes } from "crypto";
 import { sessionMiddleware } from "@/lib/session-middleware";
 import { createCredentialsSchema } from "../schemas";
-import { enrichAndStoreInitialCommits, githubHeaders, mapGithubApiError, parseGithubErrorPayload, type InitialBackfillResult } from "../../commits/server/github-commits-utils";
+import { githubHeaders, mapGithubApiError, parseGithubErrorPayload } from "../../commits/server/github-commits-utils";
 
 const credentialsApp = new Hono()
     .get("/", sessionMiddleware, async (c) => { // get the github webhook credential for a member
@@ -43,29 +43,31 @@ const credentialsApp = new Hono()
         const memberId = c.req.param("memberId");
         const data = c.req.valid("json");
 
-        console.log(`[CREDENTIALS POST] Starting credential creation for member=${memberId}`);
-
         if (!account) {
-            console.log(`[CREDENTIALS POST] No account found`);
+            console.log(`No account found`);
             return c.json({ error: "Unauthorized" }, 401);
         }
 
         if (!memberId) {
-            console.log(`[CREDENTIALS POST] No memberId provided`);
+            console.log(`No memberId provided`);
             return c.json({ error: "Member is required" }, 400);
         }
 
         try {
-            console.log(`[CREDENTIALS POST] Fetching member ${memberId}`);
+            console.log(`Fetching member ${memberId}`);
             const member = await pb.collection("members").getOne(memberId, { expand: "user,project" }); // the auth user is the member
-            console.log(`[CREDENTIALS POST] Member found, checking ownership`);
             if (member.user !== account.id) {
-                console.log(`[CREDENTIALS POST] Member not owned by account`);
+                console.log(`Member not owned by account`);
                 return c.json({ error: "You do not have access to this member's credentials" }, 403);
             }
 
-            console.log(`[CREDENTIALS POST] Creating credential record in DB`);
+            console.log(`Creating credential record in db`);
             const webhookSecret = randomBytes(32).toString('hex');
+            console.log(`api_keys data:`, {
+                token: data.api_keys.token ? "***" : "MISSING",
+                owner: data.api_keys.owner,
+                repo: data.api_keys.repo,
+            });
             const credentials = await pb.collection("credentials").create({
                 member: memberId,
                 api_keys: {
@@ -74,17 +76,19 @@ const credentialsApp = new Hono()
                 },
                 api_limitations: data.api_limitations,
             });
-            console.log(`[CREDENTIALS POST] Credential created: ${credentials.id}`);
+            console.log(`Credential created: ${credentials.id}`, {
+                api_keys_keys: Object.keys(credentials.api_keys || {}),
+            });
 
             const { token, owner, repo } = data.api_keys;
             const webhookUrl = process.env.AZURE_FUNCTION_URL;
-            console.log(`[CREDENTIALS POST] WebhookUrl: ${webhookUrl}`);
+            console.log(`WebhookUrl: ${webhookUrl}`);
             
             if (!webhookUrl) {
                 throw new Error("AZURE_FUNCTION_URL is not configured");
             }
             
-            console.log(`Creating GitHub webhook for ${owner}/${repo} with url: ${webhookUrl}`);
+            console.log(`Creating github webhook for ${owner}/${repo} with url: ${webhookUrl}`);
             
             const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
                 headers: githubHeaders(token),
@@ -160,27 +164,8 @@ const credentialsApp = new Hono()
             const webhookData = await githubRes.json();
             console.log('GitHub webhook created:', webhookData.id);
 
-            const projectId = member.expand?.project?.id; // still needed for member verification
-            let initialBackfill: InitialBackfillResult | null = null;
-
-            if (projectId) {
-                try {
-                    initialBackfill = await enrichAndStoreInitialCommits({
-                        pb,
-                        memberId,
-                        repository: `${owner}/${repo}`,
-                        token,
-                        projectId,
-                    });
-                    console.log(`Initial backfill completed:`, initialBackfill);
-                } catch (backfillError) {
-                    console.error("Initial commit enrichment failed:", backfillError);
-                }
-            } else {
-                console.warn(`No projectId found in member expand, skipping initial backfill`);
-            }
-
-            return c.json({ data: credentials, initialBackfill }, 201);
+            // backfill will happen automatically via auto refresh when project mounts
+            return c.json({ data: credentials }, 201);
         } catch (error: any) {
             console.error("Failed to create credential:", error);
             

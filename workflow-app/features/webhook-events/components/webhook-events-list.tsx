@@ -33,41 +33,7 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
             return;
         }
 
-        const applyBackfillNotice = () => {
-            const rawNotice = sessionStorage.getItem("credentialBackfillNotice");
-            if (!rawNotice) {
-                return;
-            }
-
-            try {
-                const parsed = JSON.parse(rawNotice) as {
-                    projectId?: string;
-                    memberId?: string;
-                    fetchedFromGithub?: number;
-                };
-
-                if (parsed.projectId === projectId && parsed.memberId === memberId) {
-                    const fetched = parsed.fetchedFromGithub ?? 0;
-                    setSyncSummary([
-                        `Initial 'create commit' backfill action: fetched ${fetched} commits`,
-                    ]);
-                    sessionStorage.removeItem("credentialBackfillNotice");
-                }
-            } catch {
-                sessionStorage.removeItem("credentialBackfillNotice");
-            }
-        };
-
-        const onBackfillNotice = () => {
-            applyBackfillNotice();
-        };
-
-        applyBackfillNotice();
-        window.addEventListener("credential-backfill-notice", onBackfillNotice);
-
-        return () => {
-            window.removeEventListener("credential-backfill-notice", onBackfillNotice);
-        };
+        // initial backfill handling removed, refresh:true handles all backfilling now, otherwise duplication takes place
     }, [projectId, memberId]);
 
     const getEventGithubTimestamp = (event: any) => {
@@ -222,7 +188,7 @@ export function WebhookEventsList({ projectId, memberId }: Props) {
                                     {event.event_type}
                                 </Badge>
                                 <span className="text-sm text-muted-foreground">
-                                    {formatDistanceToNow(new Date(event.created), { addSuffix: true })}
+                                    fetched {formatDistanceToNow(new Date(event.created), { addSuffix: false })} ago
                                 </span>
                             </div>
                             <Button variant="ghost" size="sm" onClick={() => expandEventBehaviour(event.id)} className="h-8 w-8 p-0 shrink-0">

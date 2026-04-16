@@ -8,3 +8,5 @@ setup.md
 .venv
 workflow-app/.config
 workflow-app/tools
+desktop-shell/resources/pocketbase/pb_data
+desktop-shell/resources/pocketbase/pb_migrations

@@ -258,19 +258,28 @@ export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, t
 
         // on initial credential creation the webhook_events table is empty for that member+repository combination, so there's no possibility of existing records to update
         try {
-            const createPayload: any = {
-                member: memberId,
-                event_type: "commit",
-                repository,
-                payload: normalizedCommit,
-            };
-            
-            if (projectId) {
-                createPayload.project = projectId;
+            // check if commit already exists to avoid duplicates
+            const existing = await pb.collection("webhook_events").getList(1, 1, {
+                filter: `member="${memberId}" && repository="${repository}" && event_type="commit" && payload.sha="${sha}"`,
+            });
+
+            if (existing.totalItems === 0) {
+                const createPayload: any = {
+                    member: memberId,
+                    event_type: "commit",
+                    repository,
+                    payload: normalizedCommit,
+                };
+                
+                if (projectId) {
+                    createPayload.project = projectId;
+                }
+                
+                const created = await pb.collection("webhook_events").create(createPayload);
+                console.log(`Created webhook event for commit ${sha.substring(0, 7)}, record id=${created.id}`);
+            } else {
+                console.log(`Commit ${sha.substring(0, 7)} already exists, skipping`);
             }
-            
-            const created = await pb.collection("webhook_events").create(createPayload);
-            console.log(`Created webhook event for commit ${sha.substring(0, 7)}, record id=${created.id}`);
         } catch (createError) {
             console.error(`Failed to create webhook event for ${sha}:`, createError);
             throw createError;

@@ -33,7 +33,7 @@ export function CommitEventDetails({ payload, repository }: { payload: any; repo
     const removedCount = (payload.removed || []).length || removedFromFiles;
 
     const timeLabel = dateValue
-        ? new Date(dateValue).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        ? new Date(dateValue).toLocaleString([], { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
         : "Unknown time";
 
     return (

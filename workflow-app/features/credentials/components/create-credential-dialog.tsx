@@ -82,24 +82,8 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId,
                 { projectId, memberId, ...values },
                 {
                     onSuccess: (data) => {
-                        if (typeof window !== "undefined" && data.initialBackfill) { // checking if using sessionStorage and window is possible, since they only exist in the browser (might need to change after switching to desktop version)
-                            // if initialBackfill exists it means credential creation also did an initial commit fetch
-                            const backfillNotice = {
-                                projectId,
-                                memberId,
-                                fetchedFromGithub: data.initialBackfill.fetchedFromGithub,
-                            };
-
-                            sessionStorage.setItem(
-                                "credentialBackfillNotice",
-                                JSON.stringify(backfillNotice)
-                            );
-
-                            window.dispatchEvent( // in page event telling that the new backfill notice is ready
-                                new CustomEvent("credential-backfill-notice", { detail: backfillNotice })
-                            );
-                        }
-                        setCreatedCredential(data); // includes credential + initialBackfill summary
+                        // backfill will happen via auto refresh when project mounts
+                        setCreatedCredential(data);
                         // onOpenChange(false); moved these to handleOpenChange
                         // form.reset();
                     }
