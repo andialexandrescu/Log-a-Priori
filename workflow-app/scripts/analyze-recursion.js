@@ -77,17 +77,17 @@ function getDesktopShellAppdataPath(projectId) {
 }
 
 function buildAppdataOutputPath(projectId) {
-    const baseDir = getProjectAppdataPath(projectId);
+    const baseDir = getDesktopShellAppdataPath(projectId);
     return path.join(baseDir, "analysis", "ts-code-graph.json");
 }
 
 function buildPerCommitFunctionIndexPath(projectId, sha) {
-    const baseDir = getProjectAppdataPath(projectId);
+    const baseDir = getDesktopShellAppdataPath(projectId);
     return path.join(baseDir, "analysis", `${sha}.json`);
 }
 
 async function deleteAnalysisFolder(projectId) {
-    const baseDir = getProjectAppdataPath(projectId);
+    const baseDir = getDesktopShellAppdataPath(projectId);
     const analysisPath = path.join(baseDir, "analysis");
     try {
         await fs.rm(analysisPath, { recursive: true, force: true });
@@ -221,7 +221,7 @@ async function run() {
 
     if (args.projectId) { // building per commit function indices from appdata
         console.log(`\nBuilding per commit function indices for projectId: ${args.projectId}`);
-        const appdataBase = getProjectAppdataPath(args.projectId);
+        const appdataBase = getDesktopShellAppdataPath(args.projectId);
         const commitsBasePath = path.join(appdataBase, "commits");
         
         try {
