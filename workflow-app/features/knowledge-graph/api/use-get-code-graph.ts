@@ -25,7 +25,7 @@ export const useGetCodeGraph = (projectId: string) => {
                     param: params,
                 });
 
-                const json = await res.json();
+                const json = await res.json() as any;
 
                 if (!res.ok) {
                     const message = "error" in json ? json.error : "Failed to get knowledge graph";

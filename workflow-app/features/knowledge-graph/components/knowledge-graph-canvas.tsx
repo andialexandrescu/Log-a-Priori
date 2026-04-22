@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Loader2, Maximize2, Minimize2, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2, RefreshCw } from "lucide-react";
 import { GraphCanvas, lightTheme } from "reagraph";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -11,12 +11,76 @@ import { KnowledgeGraphStatsControls } from "./stats-controls";
 import { KnowledgeGraphPagerControls } from "./pager-controls";
 import { Button } from "@/components/ui/button";
 import { useQueryClient } from "@tanstack/react-query";
+import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useGetFunctionHistory, type FunctionHistoryEntry } from "../api/use-get-function-history";
+import { useGetFunctionSource } from "../api/use-get-function-source";
+import { Copy } from "lucide-react";
+import { toast } from "sonner";
+import { useGetRemovedGraph } from "../api/use-get-removed-graph";
 
 type FunctionNode = {
     key: string;
     name: string;
     file: string;
     line: number;
+    commitHistory?: FunctionHistoryEntry[];
+    simpleName?: string;
+    kind?: string;
+};
+
+type GraphFunctionRecord = {
+    id: string;
+    name?: string;
+    simpleName?: string;
+    kind?: string;
+    file?: string;
+    repoRelativePath?: string;
+    line?: number;
+    startLine?: number;
+    endLine?: number;
+};
+
+type SelectedFunctionNode = {
+    key: string;
+    name: string;
+    simpleName: string;
+    kind: string;
+    file: string;
+    line: number;
+    startLine?: number;
+    endLine?: number;
+};
+
+type FunctionSourcePayload = {
+    data?: {
+        sha: string;
+        file: string;
+        operation: string;
+        startLine: number;
+        endLine: number;
+        sourceCode: string;
+    } | null;
+    message?: string;
+};
+
+type CodeGraphPayload = {
+    data?: {
+        graph?: {
+            nodes?: GraphFunctionRecord[];
+            edges?: FunctionEdge[];
+        };
+        visualization?: {
+            functionNodes?: FunctionNode[];
+            edges?: {
+                calls?: {
+                    inFile?: FunctionEdge[];
+                    crossFile?: FunctionEdge[];
+                };
+            };
+            components?: string[][];
+        };
+    } | null;
 };
 
 type FunctionEdge = {
@@ -40,6 +104,32 @@ type GraphPointerEvent = {
 };
 
 type GraphViewMode = "component" | "all-commits";
+
+type GraphDataResult = {
+    graphData: {
+        nodes: Array<{
+            id: string;
+            label: string;
+            data: FunctionNode;
+            fill?: string;
+            strokeWidth?: number;
+            stroke?: string;
+        }>;
+        edges: Array<{
+            id: string;
+            source: string;
+            target: string;
+            label: string;
+            data: FunctionEdge;
+            fill?: string;
+            dashed?: boolean;
+            dashArray?: [number, number];
+            interpolation?: "curved" | "linear";
+        }>;
+    };
+    componentCount: number;
+    selectedComponentLabel: string;
+};
 
 function getClientPosFromGraphEvent(event: unknown): { x: number; y: number } | null {
     const e = event as {
@@ -95,9 +185,24 @@ function isVisibleFunction(node: FunctionNode, searchText: string): boolean {
     return `${node.name} ${node.file}`.toLowerCase().includes(q);
 }
 
+function getNodeStyle(node: FunctionNode, commitHistory?: FunctionHistoryEntry[]) {
+    if (!commitHistory || commitHistory.length === 0) {
+        return { fill: "#e2e8f0", strokeWidth: 1, stroke: "#e2e8f0" }; // edges with no commit history are grey, since there might be part of files not pushed yet
+    }
+    const latestChange = commitHistory[0].changeType;
+    const colorMap: Record<string, { fill: string; strokeWidth: number }> = {
+        added: { fill: "#86efac", strokeWidth: 2 }, // green
+        modified: { fill: "#93c5fd", strokeWidth: 2 }, // blue
+        removed: { fill: "#fca5a5", strokeWidth: 2 }, // red
+        unchanged: { fill: "#e2e8f0", strokeWidth: 1 }, // grey
+    };
+    return colorMap[latestChange] || colorMap.unchanged;
+}
+
 export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
     const { data, isLoading } = useGetCodeGraph(projectId);
     const queryClient = useQueryClient();
+    const { data: removedData, isLoading: removedLoading } = useGetRemovedGraph(projectId);
     const [search, setSearch] = useState("");
     const [currentComponentIndex, setCurrentComponentIndex] = useState(0);
     const [viewMode, setViewMode] = useState<GraphViewMode>("component");
@@ -107,6 +212,26 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
     const [hoveredEdge, setHoveredEdge] = useState<FunctionEdge | null>(null);
     const [hoverClientPos, setHoverClientPos] = useState<{ x: number; y: number } | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [selectedFunction, setSelectedFunction] = useState<SelectedFunctionNode | null>(null);
+    const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
+    const [selectedHistoryIndex, setSelectedHistoryIndex] = useState(-1);
+
+    const renderCustomNode = ({ id, color, size, opacity, node }: any) => { // used for rendering a custom node that changes color on hover since the default turquoise one might get mistaken for a green added node
+        const displayColor = hoveredNode?.key === id ? '#a855f7' : color; // purple
+        
+        return (
+            <group onPointerOver={() => {
+                const originalNode = mergedGraphData.graphData.nodes.find(n => n.id === id)?.data;
+                if (originalNode) setHoveredNode(originalNode);
+            }}
+            onPointerOut={() => setHoveredNode(null)}>
+                <mesh>
+                    <sphereGeometry args={[size, 32, 32]} />
+                    <meshBasicMaterial color={displayColor} opacity={opacity} transparent />
+                </mesh>
+            </group>
+        );
+    };
 
     const handleRunAnalysis = async () => {
         if (typeof window === "undefined" || !window.desktopControl || !projectId) return;
@@ -121,8 +246,96 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
         }
     };
 
-    const graph = data?.data?.graph;
-    const visualization = data?.data?.visualization;
+    const codeGraphPayload = data as CodeGraphPayload | undefined;
+    const graph = codeGraphPayload?.data?.graph;
+    const visualization = codeGraphPayload?.data?.visualization;
+
+    const graphNodeByKey = useMemo(() => {
+        const map = new Map<string, GraphFunctionRecord>();
+        const rawNodes = (graph?.nodes ?? []) as GraphFunctionRecord[];
+
+        for (const node of rawNodes) {
+            if (typeof node?.id === "string" && node.id) {
+                map.set(node.id, node);
+            }
+        }
+
+        return map;
+    }, [graph?.nodes]);
+
+    const historyQuery = useGetFunctionHistory(
+        projectId,
+        selectedFunction
+        ? {
+            file: selectedFunction.file,
+            simpleName: selectedFunction.simpleName,
+            kind: selectedFunction.kind,
+        }
+        : null
+    );
+
+    const historyEntries = useMemo(() => {
+        if (!historyQuery.data || typeof historyQuery.data !== "object" || !("data" in historyQuery.data)) {
+            return [] as FunctionHistoryEntry[];
+        }
+
+        const maybeData = historyQuery.data.data;
+        return Array.isArray(maybeData) ? (maybeData as FunctionHistoryEntry[]) : [];
+    }, [historyQuery.data]);
+
+    useEffect(() => {
+        setSelectedHistoryIndex(-1);
+    }, [selectedFunction?.key]);
+
+    useEffect(() => {
+        if (historyEntries.length === 0) {
+            setSelectedHistoryIndex(-1);
+            return;
+        }
+
+        setSelectedHistoryIndex((prev) => {
+            if (prev >= 0 && prev < historyEntries.length) {
+                return prev;
+            }
+
+            return 0; // starting with the first/ oldest commit
+        });
+    }, [historyEntries]);
+
+    const selectedCommit = selectedHistoryIndex >= 0 && selectedHistoryIndex < historyEntries.length ? historyEntries[selectedHistoryIndex] : null;
+
+    const selectedSourceParams = useMemo(() => {
+        if (!selectedFunction) {
+            return null;
+        }
+
+        const hasHistory = historyEntries.length > 0; // if there is no commit history, use current source for functions not tracked yet
+        if (!hasHistory) {
+            const startLine = selectedFunction.startLine || selectedFunction.line || 1;
+            const endLine = selectedFunction.endLine || startLine;
+            return {
+                sha: "current",
+                file: selectedFunction.file,
+                startLine,
+                endLine,
+            };
+        }
+
+        if (!selectedCommit) return null;
+
+        const startLine = Math.max(1, selectedCommit.boundaries?.startLine ?? selectedFunction.startLine ?? selectedFunction.line ?? 1);
+        const endLine = Math.max(startLine, selectedCommit.boundaries?.endLine ?? selectedFunction.endLine ?? startLine);
+
+        return {
+            sha: selectedCommit.sha,
+            file: selectedCommit.file || selectedFunction.file,
+            startLine,
+            endLine,
+        };
+    }, [selectedCommit, selectedFunction]);
+
+    const sourceQuery = useGetFunctionSource(projectId, selectedSourceParams);
+    const sourcePayload = sourceQuery.data as FunctionSourcePayload | undefined;
 
     useEffect(() => {
         if (!fullScreen) return;
@@ -138,7 +351,7 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
         };
     }, [fullScreen]);
 
-    const { graphData, componentCount, selectedComponentLabel } = useMemo(() => { // prepare data for reagraph
+    const graphDataResult = useMemo((): GraphDataResult => { // prepare data for reagraph
         const rawNodes = (visualization?.functionNodes ?? []) as FunctionNode[];
         const rawCallInFileEdges = (visualization?.edges?.calls?.inFile ?? []) as FunctionEdge[];
         const rawCallCrossFileEdges = (visualization?.edges?.calls?.crossFile ?? []) as FunctionEdge[];
@@ -163,11 +376,15 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
             (edge) => visibleKeySet.has(edge.from) && visibleKeySet.has(edge.to) // filter by visible nodes
         );
 
-        const nodes = visibleNodes.map((node) => ({ // convert to reagraph format
-            id: node.key,
-            label: node.name,
-            data: node,
-        }));
+        const nodes = visibleNodes.map((node) => { // convert to reagraph format
+            const nodeStyle = getNodeStyle(node, node.commitHistory); // applying the custom node hover color
+            return {
+                id: node.key,
+                label: node.name,
+                data: node,
+                ...nodeStyle,
+            };
+        });
 
         const edges = visibleEdges.map((edge, idx) => ({
             id: `${edge.from}-${edge.to}-${idx}`,
@@ -185,40 +402,92 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
         };
     }, [search, visualization, currentComponentIndex, viewMode]);
 
+    const { graphData, componentCount, selectedComponentLabel } = graphDataResult;
+
+    const mergedGraphData = useMemo((): GraphDataResult => {
+        const removed = removedData?.data;
+        
+        if (!removed || !removed.visualization?.functionNodes) {
+            return { graphData, componentCount, selectedComponentLabel };
+        }
+        
+        const existingKeys = new Set(graphData.nodes.map(n => n.id)); // existing node keys to avoid duplicates
+        const newRemovedNodes = removed.visualization.functionNodes
+            .filter(node => !existingKeys.has(node.key)) // filtering removed nodes that aren't already in the main graph
+            .map(node => ({
+                id: node.key,
+                label: node.name,
+                data: {
+                    ...node,
+                    isRemoved: true,
+                    commitHistory: node.commitHistory,
+                },
+                fill: "#fca5a5",
+                strokeWidth: 2,
+                stroke: "#ef4444",
+            }));
+        
+        const mergedNodes = [...graphData.nodes, ...newRemovedNodes]; // merging other types of nodes with removed ones and edges
+        const mergedEdges = [...graphData.edges];
+        
+        return {
+            graphData: {
+                nodes: mergedNodes,
+                edges: mergedEdges,
+            },
+            componentCount,
+            selectedComponentLabel,
+        };
+    }, [graphData, removedData]);
+
     const counts = useMemo(() => { // counts are used for stats controls
-        const nodes = graphData.nodes.length;
-        const edges = graphData.edges.length;
-        const callEdges = graphData.edges.filter((e) => {
+        const nodes = mergedGraphData.graphData.nodes.length;
+        const edges = mergedGraphData.graphData.edges.length;
+        const callEdges = mergedGraphData.graphData.edges.filter((e) => {
             const edge = e.data as FunctionEdge | undefined;
             return edge?.kind === "CALLS";
         }).length;
-        const usesEdges = graphData.edges.filter((e) => {
+        const usesEdges = mergedGraphData.graphData.edges.filter((e) => {
             const edge = e.data as FunctionEdge | undefined;
             return edge?.kind === "USES";
         }).length;
-        const inFileEdges = graphData.edges.filter((e) => {
+        const inFileEdges = mergedGraphData.graphData.edges.filter((e) => {
             const edge = e.data as FunctionEdge | undefined;
             return edge?.scope !== "cross-file";
         }).length;
-        const crossFileEdges = graphData.edges.filter((e) => {
+        const crossFileEdges = mergedGraphData.graphData.edges.filter((e) => {
             const edge = e.data as FunctionEdge | undefined;
             return edge?.scope === "cross-file";
         }).length;
-        const roots = graphData.nodes.filter((node) =>
-            !graphData.edges.some((e) => e.target === node.id)
+        const roots = mergedGraphData.graphData.nodes.filter((node) =>
+            !mergedGraphData.graphData.edges.some((e) => e.target === node.id)
         ).length;
-        const files = new Set(graphData.nodes.map((n) => n.data.file)).size;
+        const files = new Set(mergedGraphData.graphData.nodes.map((n) => n.data.file)).size;
         return { nodes, edges, callEdges, usesEdges, inFileEdges, crossFileEdges, roots, files };
-    }, [graphData]);
+    }, [mergedGraphData]);
 
     const nodeById = useMemo(() => {
-        return new Map(graphData.nodes.map((node) => [node.id, node.data as FunctionNode]));
-    }, [graphData.nodes]);
+        return new Map(mergedGraphData.graphData.nodes.map((node) => [node.id, node.data as FunctionNode]));
+    }, [mergedGraphData.graphData.nodes]);
 
     const goToPreviousComponent = () => setCurrentComponentIndex((prev) => Math.max(0, prev - 1));
     const goToNextComponent = () => setCurrentComponentIndex((prev) => Math.min(componentCount - 1, prev + 1));
     const toggleFullScreen = () => setFullScreen((prev) => !prev);
     const isComponentView = viewMode === "component";
+
+    const handleCopySourceCode = async () => {
+        const sourceCode = sourcePayload?.data?.sourceCode;
+        if (!sourceCode) {
+            toast.error("No source code to copy");
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(sourceCode);
+            toast.success("Source code copied to clipboard");
+        } catch (err) {
+            toast.error("Failed to copy source code");
+        }
+    };
 
     if (isLoading) {
         return (
@@ -287,7 +556,7 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
                 </div>
                 <KnowledgeGraphStatsControls minimalMode={minimalMode} onMinimalModeChange={setMinimalMode} counts={counts} projectId={projectId}/>
                 {isComponentView && (
-                    <KnowledgeGraphPagerControls currentComponentIndex={currentComponentIndex} componentCount={componentCount} selectedComponentLabel={selectedComponentLabel} onPrevious={goToPreviousComponent} onNext={goToNextComponent}/>
+                    <KnowledgeGraphPagerControls componentCount={mergedGraphData.componentCount} selectedComponentLabel={mergedGraphData.selectedComponentLabel}  currentComponentIndex={currentComponentIndex} onPrevious={goToPreviousComponent} onNext={goToNextComponent}/>
                 )}
             </>
             )}
@@ -318,7 +587,33 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
         </CardHeader>
         <CardContent className={cn("flex-1 min-h-0", fullScreen && "p-0")}>
             <div className="relative h-full w-full rounded-lg border border-border bg-slate-50">
-                <GraphCanvas nodes={graphData.nodes} edges={graphData.edges} theme={lightTheme}
+                <GraphCanvas nodes={mergedGraphData.graphData.nodes} edges={mergedGraphData.graphData.edges} theme={lightTheme} renderNode={renderCustomNode}
+                    onNodeClick={(node: GraphHoverNode) => {
+                        const clicked = node.data;
+                        if (!clicked) return;
+
+                        const isRemovedNode = (clicked as any).isRemoved === true;
+
+                        let sourceNode = undefined; // for removed nodes, sourceNode doesn't exist in the main graph and matching based on the key will fail to be retrived
+                        if (!isRemovedNode) {
+                            sourceNode = graphNodeByKey.get(clicked.key);
+                        }
+
+                        const selectedFile = (sourceNode?.file || sourceNode?.repoRelativePath || clicked.file || "").replace(/\\/g, "/");
+                        if (!selectedFile) return;
+
+                        setSelectedFunction({
+                            key: clicked.key,
+                            name: sourceNode?.name || clicked.name,
+                            simpleName: sourceNode?.simpleName ?? clicked.simpleName ?? clicked.name,
+                            kind: sourceNode?.kind ?? clicked.kind ?? "function",
+                            file: selectedFile,
+                            line: sourceNode?.line || sourceNode?.startLine || clicked.line,
+                            startLine: sourceNode?.startLine,
+                            endLine: sourceNode?.endLine,
+                        });
+                        setIsHistoryDrawerOpen(true);
+                    }}
                     onNodePointerOver={(node: GraphHoverNode, event: GraphPointerEvent) => {
                         const originalNode = node.data;
                         if (!originalNode) return;
@@ -347,6 +642,107 @@ export function KnowledgeGraphCanvas({ projectId }: { projectId: string }) {
             </div>
         </CardContent>
         </Card>
+
+        <Drawer open={isHistoryDrawerOpen} onOpenChange={setIsHistoryDrawerOpen} direction="right">
+            <DrawerContent className="sm:max-w-xl">
+                <DrawerHeader>
+                    <DrawerTitle>{selectedFunction?.name || "Function history"}</DrawerTitle>
+                    <DrawerDescription>
+                        {selectedFunction
+                            ? `${selectedFunction.file} | ${selectedFunction.kind}`
+                            : "Select a function node to inspect commit level source code"}
+                    </DrawerDescription>
+                </DrawerHeader>
+
+                <div className="flex h-full min-h-0 flex-1 flex-col gap-3 px-4 pb-4">
+                    {!selectedFunction && (
+                        <p className="text-sm text-muted-foreground">Select a function node from the graph to load its timeline</p>
+                    )}
+
+                    {selectedFunction && (
+                        <>
+                            {!historyQuery.isLoading && historyEntries.length > 0 && (
+                                <>
+                                    <div className="flex items-center gap-2">
+                                        <Button variant="outline" size="sm" onClick={() => setSelectedHistoryIndex((prev) => Math.max(prev - 1, 0))} disabled={selectedHistoryIndex <= 0} >
+                                            <ChevronLeft className="size-4" />
+                                            Previous
+                                        </Button>
+                                        <Button variant="outline" size="sm" onClick={() => setSelectedHistoryIndex((prev) => Math.min(prev + 1, historyEntries.length - 1))} disabled={selectedHistoryIndex >= historyEntries.length - 1}>
+                                            Next
+                                            <ChevronRight className="size-4" />
+                                        </Button>
+                                        <span className="text-xs text-muted-foreground">
+                                            {selectedHistoryIndex + 1}/{historyEntries.length}
+                                        </span>
+                                    </div>
+
+                                    {selectedCommit && (
+                                        <div className="rounded-md border bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
+                                            <p>
+                                                Commit SHA: <span className="font-mono text-foreground">{selectedCommit.sha}</span>
+                                            </p>
+                                            <p>
+                                                Change type: <span className="text-foreground">{selectedCommit.changeType}</span>
+                                            </p>
+                                            <p>
+                                                Lines: <span className="text-foreground">{selectedSourceParams?.startLine}-{selectedSourceParams?.endLine}</span>
+                                            </p>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                            
+                            {historyQuery.isLoading && (
+                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                    <Loader2 className="size-4 animate-spin" />
+                                    Loading commit history
+                                </div>
+                            )}
+
+                            {!historyQuery.isLoading && historyEntries.length === 0 && (
+                                <p className="text-sm text-muted-foreground">
+                                    No change history found, showing current source code from the project
+                                </p>
+                            )}
+
+                            <div className="flex min-h-0 flex-1 flex-col rounded-md border">
+                                <div className="flex items-center justify-between border-b px-3 py-2">
+                                    <span className="text-xs text-muted-foreground">
+                                        {historyEntries.length > 0 ? "Source at selected commit" : "Current source code"}
+                                    </span>
+                                    <Button onClick={handleCopySourceCode} disabled={!sourcePayload?.data?.sourceCode} className="rounded p-1 hover:bg-muted transition-colors disabled:opacity-50" title="Copy source code" >
+                                        <Copy className="size-3.5" />
+                                    </Button>
+                                </div>
+                                <ScrollArea className="h-[55vh]">
+                                    <div className="p-3">
+                                        {sourceQuery.isLoading && (
+                                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                <Loader2 className="size-4 animate-spin" />
+                                                Loading source code
+                                            </div>
+                                        )}
+
+                                        {!sourceQuery.isLoading && sourcePayload?.data?.sourceCode && (
+                                            <pre className="overflow-x-auto whitespace-pre text-xs leading-5 font-mono">
+                                                {sourcePayload.data.sourceCode}
+                                            </pre>
+                                        )}
+
+                                        {!sourceQuery.isLoading && !sourcePayload?.data?.sourceCode && (
+                                            <p className="text-sm text-muted-foreground">
+                                                {sourcePayload?.message || "Source code unavailable for this selection"}
+                                            </p>
+                                        )}
+                                    </div>
+                                </ScrollArea>
+                            </div>
+                        </>
+                    )}
+                </div>
+            </DrawerContent>
+        </Drawer>
 
         {hoverClientPos && hoveredNode &&
             createPortal(

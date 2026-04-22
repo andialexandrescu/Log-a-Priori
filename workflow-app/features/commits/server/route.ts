@@ -3,7 +3,6 @@ import { sessionMiddleware } from "@/lib/session-middleware";
 import { zValidator } from "@hono/zod-validator";
 import { getCommitsQuerySchema } from "../schemas";
 import { enrichCommitWithDetails, getNextLinkUrl, githubHeaders, hasCommitFilesExport, syncCommitFilesToSelectedRoot, type GithubCommitSummary } from "./github-commits-utils";
-import { buildCommitIndex } from "./commit-index-builder";
 
 const mapCommitPayload = (payload: any) => ({
     sha: payload?.sha,
@@ -206,26 +205,6 @@ const commitsApp = new Hono()
             }); // refreshing allEvents after creating new entries
         }
         
-        if (projectId && memberId) { // building or updating commit index for this repo
-            try {
-                const memberExists = await pb.collection("members").getOne(memberId).catch(() => null);
-                if (!memberExists) {
-                    console.error(`Member not found: ${memberId}`);
-                } else {
-                    console.log(`Member verified: ${memberId}`);
-                }
-                
-                await buildCommitIndex({
-                    pb,
-                    memberId,
-                    projectId,
-                    repository: repo,
-                });
-            } catch (indexError) {
-                console.error(`Failed to build commit index for ${repo}:`, indexError);
-            }
-        }
-        
         const commits = (allEvents as any[]).map((ev: any) => mapCommitPayload(ev.payload));
 
         const response: any = {
@@ -243,34 +222,6 @@ const commitsApp = new Hono()
         }
 
         return c.json(response);
-    })
-    .get("/index", sessionMiddleware, zValidator("query", getCommitsQuerySchema), async (c) => {
-        const pb = c.get("pb");
-        const account = c.get("account");
-        const projectId = c.req.param("projectId");
-        const memberId = c.req.param("memberId");
-        const { repo } = c.req.valid("query");
-
-        if (!account) {
-            return c.json({ error: "Unauthorized" }, 401);
-        }
-
-        await pb.collection("members").getFirstListItem(
-            `user = "${account.id}" && project = "${projectId}" && id = "${memberId}"`
-        );
-
-        try {
-            const index = await pb.collection("commit_index").getFirstListItem(
-                `member="${memberId}" && project="${projectId}" && repository="${repo}"`
-            );
-
-            return c.json({ data: index });
-        } catch (error) {
-            return c.json({
-                data: null,
-                error: "Commit index not found",
-            }, 404);
-        }
     });
 
 export default commitsApp;

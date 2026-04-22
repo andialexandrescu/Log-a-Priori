@@ -2,13 +2,12 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
 const { buildVisualization } = require("./graph-visualization.js");
-const { analyzeCommitDirectory: tsAnalyzeCommit, analyzeFullProject: tsAnalyzeFullProject } = require('./ts-ast-tree.js');
-console.log("ts-ast-tree.js loaded");
+const { analyzeCommitDirectory: tsAnalyzeCommit, analyzeFullProject: tsAnalyzeFullProject, loadFullBaseline, saveFullBaseline, buildFullBaselineIndexPath, sortCommitsChronologically } = require('./ts-ast-tree.js');
+const { buildFunctionHistory, saveFunctionHistory } = require('./build-function-history.js');
 
 function parseRoot(argv) {
     const args = {
         root: "",
-        fullProject: false,
         projectId: null,
     };
 
@@ -20,10 +19,6 @@ function parseRoot(argv) {
         throw new Error("Missing required root path argument");
     }
 
-    if (argv.includes("--full-project")) { // yet to implement the per commit analysis
-        args.fullProject = true;
-    }
-
     const projectIdIndex = argv.indexOf("--project-id"); // in order to be able save specific ts-code-analysis.json to project based subfolder inside appdata
     if (projectIdIndex !== -1 && argv[projectIdIndex + 1]) {
         args.projectId = argv[projectIdIndex + 1];
@@ -31,7 +26,6 @@ function parseRoot(argv) {
 
     return args;
 }
-
 
 async function exists(targetPath) {
     try {
@@ -51,66 +45,8 @@ async function readJsonIfExists(filePath) {
     }
 }
 
-async function listDirectories(targetPath) {
-    const entries = await fs.readdir(targetPath, { withFileTypes: true });
-    return entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(targetPath, entry.name));
-}
-
-async function isCommitDirectory(targetPath) {
-    const added = path.join(targetPath, "added");
-    const modified = path.join(targetPath, "modified");
-    const removed = path.join(targetPath, "removed");
-    return (await exists(added)) || (await exists(modified)) || (await exists(removed));
-}
-
-async function discoverCommitDirectories(rootPath) { // returns a list consisting of /path/to/owner/repo/commits/commit_sha
-    const normalizedRoot = path.resolve(rootPath);
-    const commitDirs = []
-
-    // broad bfs search - up to commits folder
-    const queue = [{ dir: normalizedRoot, depth: 0 }];
-    while (queue.length > 0) {
-        const current = queue.shift();
-        if (!current || current.depth >= 4) continue;
-
-        if (path.basename(current.dir).toLowerCase() === "commits") {
-            try { // check children of commits folder for actual commit dirs
-                const children = await listDirectories(current.dir);
-                for (const child of children) {
-                    if (await isCommitDirectory(child)) {
-                        commitDirs.push(child);
-                    }
-                }
-            } catch {}
-            continue;
-        }
-
-        try {
-            const children = await listDirectories(current.dir);
-            for (const child of children) {
-                queue.push({ dir: child, depth: current.depth + 1 });
-            }
-        } catch {}
-    }
-
-    return commitDirs.sort();
-}
-
-async function getCommitSortInfo(commitDirectory) { // input from discoverCommitDirectories(), extracts commit timestamps for sorting commits based on date
-    const manifestPath = path.join(commitDirectory, "manifest.json"); // the path to commit_sha subdir manifest file
-    const manifest = await readJsonIfExists(manifestPath);
-    const dateValue = manifest?.committer?.date || manifest?.author?.date || manifest?.exportedAt || null;
-    const timestamp = dateValue ? Date.parse(dateValue) : Number.NaN;
-
-    return {
-        commitDirectory, // passes through unchanged
-        sha: path.basename(commitDirectory),
-        sortTime: Number.isNaN(timestamp) ? null : timestamp, // adding this for the sort condition
-    };
-}
-
-async function analyzeCommitDirectory(commitDirectory) { // yet to include this after new approach
-    return await tsAnalyzeCommit(commitDirectory);
+async function analyzeCommitDirectory(commitDirectory, options = {}) { // wrapper that forwards options to tsAnalyzeCommit
+    return await tsAnalyzeCommit(commitDirectory, options);
 }
 
 async function analyzeFullProjectDirectory(projectRoot) {
@@ -132,17 +68,40 @@ function buildDefaultOutputPath(rootPath, repoPath = "") {
     return path.join(normalizedRoot, "analysis", "ts-code-graph.json");
 }
 
-function buildAppdataOutputPath(projectId) {
+function getDesktopShellAppdataPath(projectId) {
     const appData = process.env.APPDATA?.trim();
-    const baseDir = appData 
+    const baseDir = appData
         ? path.join(appData, "log-a-priori-desktop-shell", projectId)
         : path.join(os.homedir(), "AppData", "Roaming", "log-a-priori-desktop-shell", projectId);
+    return baseDir;
+}
+
+function buildAppdataOutputPath(projectId) {
+    const baseDir = getProjectAppdataPath(projectId);
     return path.join(baseDir, "analysis", "ts-code-graph.json");
+}
+
+function buildPerCommitFunctionIndexPath(projectId, sha) {
+    const baseDir = getProjectAppdataPath(projectId);
+    return path.join(baseDir, "analysis", `${sha}.json`);
+}
+
+async function deleteAnalysisFolder(projectId) {
+    const baseDir = getProjectAppdataPath(projectId);
+    const analysisPath = path.join(baseDir, "analysis");
+    try {
+        await fs.rm(analysisPath, { recursive: true, force: true });
+        console.log(`Deleted analysis folder: ${analysisPath}`);
+    } catch (err) {
+        if (err.code !== 'ENOENT') {
+            console.warn(`Could not delete analysis folder: ${err.message}`);
+        }
+    }
 }
 
 function removeIsolatedNodes(nodes, edges) {
     const connectedNodeIds = new Set();
-    const nodeIdSet = new Set(nodes.map(n => n.id)); // track which IDs actually exist as nodes
+    const nodeIdSet = new Set(nodes.map(n => n.id)); // track which ids actually exist as nodes
 
     for (const edge of edges) { // add both from and to, but only count as connected if they're actual nodes or if they're used as edge targets (functions used by modules)
         if (edge?.from && nodeIdSet.has(edge.from)) {
@@ -157,7 +116,7 @@ function removeIsolatedNodes(nodes, edges) {
         }
     }
 
-    if (edges.length === 0) {  // if there are edges, filter out isolated nodes
+    if (edges.length === 0) { // if there are edges, filter out isolated nodes
         // for projects with no resolvable edges, keep all nodes
         return {
             nodes: nodes,
@@ -181,158 +140,313 @@ function removeIsolatedNodes(nodes, edges) {
     };
 }
 
+async function findCommitDirectoryBySha(basePath, sha) { // helper to find a commit directory by sha, similar to route.ts
+    const queue = [basePath];
+    while (queue.length) {
+        const current = queue.shift();
+        if (!current) continue;
+        try {
+            const entries = await fs.readdir(current, { withFileTypes: true });
+            for (const entry of entries) {
+                if (!entry.isDirectory()) continue;
+                const fullPath = path.join(current, entry.name);
+                if (entry.name === sha) return fullPath;
+                queue.push(fullPath);
+            }
+        } catch {}
+    }
+    return null;
+}
+
 async function run() {
     const args = parseRoot(process.argv);
     
-    console.log(`Full project mode: ${args.fullProject}`);
     if (args.projectId) {
-        console.log(`Project ID: ${args.projectId}`);
+        console.log(`AST Analysis started for project id: ${args.projectId}`);
+        await deleteAnalysisFolder(args.projectId);
     }
     
-    if (args.fullProject) { // analyze the full project directory
-        console.log(`Analyzing full project at: ${path.resolve(args.root)}`);
-        const result = await analyzeFullProjectDirectory(args.root);
+    const result = await analyzeFullProjectDirectory(args.root); // analyze the full project directory
+    
+    const nodes = result.functions;
+    const edges = result.edges;
+    
+    const prunedGraph = removeIsolatedNodes(nodes, edges);
+    const finalNodes = prunedGraph.nodes;
+    const finalEdges = prunedGraph.edges;
+    const isolatedNodesRemoved = prunedGraph.removedCount;
+
+    const callEdgesOnly = finalEdges.filter(e => e.kind === "CALLS");
+    const usesEdgesOnly = finalEdges.filter(e => e.kind === "USES");
+    const visualization = buildVisualization(finalNodes, finalEdges);
+
+    const output = {
+        generatedAt: new Date().toISOString(),
+        input: {
+            root: path.resolve(args.root),
+            projectId: args.projectId || null,
+        },
+        summary: {
+            filesAnalyzed: result.filesAnalyzed,
+            functions: finalNodes.length,
+            isolatedNodesRemoved,
+            totalEdges: finalEdges.length,
+            callEdges: callEdgesOnly.length,
+            crossFileCallEdges: callEdgesOnly.filter(e => e.scope === "cross-file").length,
+            inFileCallEdges: callEdgesOnly.filter(e => e.scope === "in-file").length,
+            usesEdges: usesEdgesOnly.length,
+            crossFileUsesEdges: usesEdgesOnly.filter(e => e.scope === "cross-file").length,
+            inFileUsesEdges: usesEdgesOnly.filter(e => e.scope === "in-file").length,
+        },
+        graph: {
+            nodes: finalNodes,
+            edges: finalEdges,
+        },
+        visualization,
+    };
+
+    const outputPath = args.projectId ? path.resolve(buildAppdataOutputPath(args.projectId)) : path.resolve(buildDefaultOutputPath(args.root)) // appdata if projectId provided, otherwise default 
         
-        const nodes = result.functions;
-        const edges = result.edges;
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, JSON.stringify(output, null, 2), "utf8");
+
+    console.log("Analysis completed");
+    console.log(`Analyzed files: ${output.summary.filesAnalyzed}`);
+    console.log(`Functions: ${output.summary.functions}`);
+    console.log(`Removed isolated nodes: ${output.summary.isolatedNodesRemoved}`);
+    console.log(`Call edges: ${output.summary.callEdges} (cross-file: ${output.summary.crossFileCallEdges}, in-file: ${output.summary.inFileCallEdges})`);
+    console.log(`Uses edges: ${output.summary.usesEdges} (cross-file: ${output.summary.crossFileUsesEdges}, in-file: ${output.summary.inFileUsesEdges})`);
+    console.log(`Total edges: ${output.summary.totalEdges}`);
+    console.log(`Report: ${outputPath}`);
+
+    if (args.projectId) { // building per commit function indices from appdata
+        console.log(`\nBuilding per commit function indices for projectId: ${args.projectId}`);
+        const appdataBase = getProjectAppdataPath(args.projectId);
+        const commitsBasePath = path.join(appdataBase, "commits");
         
-        const prunedGraph = removeIsolatedNodes(nodes, edges);
-        const finalNodes = prunedGraph.nodes;
-        const finalEdges = prunedGraph.edges;
-        const isolatedNodesRemoved = prunedGraph.removedCount;
-
-        const callEdgesOnly = finalEdges.filter(e => e.kind === "CALLS");
-        const usesEdgesOnly = finalEdges.filter(e => e.kind === "USES");
-        const visualization = buildVisualization(finalNodes, finalEdges);
-
-        const output = {
-            generatedAt: new Date().toISOString(),
-            input: {
-                root: path.resolve(args.root),
-                mode: "full-project",
-                projectId: args.projectId || null,
-            },
-            summary: {
-                filesAnalyzed: result.filesAnalyzed,
-                functions: finalNodes.length,
-                isolatedNodesRemoved,
-                totalEdges: finalEdges.length,
-                callEdges: callEdgesOnly.length,
-                crossFileCallEdges: callEdgesOnly.filter(e => e.scope === "cross-file").length,
-                inFileCallEdges: callEdgesOnly.filter(e => e.scope === "in-file").length,
-                usesEdges: usesEdgesOnly.length,
-                crossFileUsesEdges: usesEdgesOnly.filter(e => e.scope === "cross-file").length,
-                inFileUsesEdges: usesEdgesOnly.filter(e => e.scope === "in-file").length,
-            },
-            graph: {
-                nodes: finalNodes,
-                edges: finalEdges,
-            },
-            visualization,
-        };
-
-        const outputPath = args.projectId ? path.resolve(buildAppdataOutputPath(args.projectId)) : path.resolve(buildDefaultOutputPath(args.root)) // appdata if projectId provided, otherwise default 
+        try {
+            await fs.access(commitsBasePath); // finding all commit directories by recursively traversing the commits folder
+            // commits/owner/repo/commits/commit_sha
+            const queue = [commitsBasePath];
+            const commitDirs = [];
             
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, JSON.stringify(output, null, 2), "utf8");
-
-        console.log("Analysis completed");
-        console.log(`Analyzed files: ${output.summary.filesAnalyzed}`);
-        console.log(`Functions: ${output.summary.functions}`);
-        console.log(`Removed isolated nodes: ${output.summary.isolatedNodesRemoved}`);
-        console.log(`Call edges: ${output.summary.callEdges} (cross-file: ${output.summary.crossFileCallEdges}, in-file: ${output.summary.inFileCallEdges})`);
-        console.log(`Uses edges: ${output.summary.usesEdges} (cross-file: ${output.summary.crossFileUsesEdges}, in-file: ${output.summary.inFileUsesEdges})`);
-        console.log(`Total edges: ${output.summary.totalEdges}`);
-        console.log(`Report: ${outputPath}`);
-    } else { // existing commit based analysis
-        const commitDirs = await discoverCommitDirectories(args.root);
-        if (commitDirs.length === 0) {
-            throw new Error(`No commit directories found from root: ${path.resolve(args.root)}`);
-        }
-
-        const sortInfo = [];
-        for (const dir of commitDirs) {
-            sortInfo.push(await getCommitSortInfo(dir));
-        }
-        sortInfo.sort((a, b) => {
-            if (a.sortTime != null && b.sortTime != null) return a.sortTime - b.sortTime;
-            if (a.sortTime != null) return -1;
-            if (b.sortTime != null) return 1;
-            return a.sha.localeCompare(b.sha);
-        });
-
-        const selected = args.limit > 0 ? sortInfo.slice(0, args.limit) : sortInfo;
-        const commitResults = [];
-
-        for (const item of selected) {
-            commitResults.push(await analyzeCommitDirectory(item.commitDirectory));
-        }
-
-        const nodes = [];
-        const edges = [];
-        const nodeSeen = new Set();
-        for (const commit of commitResults) {
-            for (const func of commit.functions) {
-                if (!nodeSeen.has(func.id)) {
-                    nodeSeen.add(func.id);
-                    nodes.push(func);
+            while (queue.length > 0) {
+                const current = queue.shift();
+                if (!current) continue;
+                
+                try {
+                    const entries = await fs.readdir(current, { withFileTypes: true });
+                    for (const entry of entries) {
+                        const fullPath = path.join(current, entry.name);
+                        if (entry.isDirectory()) {
+                            try {
+                                const subEntries = await fs.readdir(fullPath, { withFileTypes: true });
+                                const hasCommitDirs = subEntries.some(e => 
+                                    e.isDirectory() && ["added", "modified", "removed"].includes(e.name)
+                                );
+                                if (hasCommitDirs) {
+                                    commitDirs.push(fullPath);
+                                } else {
+                                    queue.push(fullPath);
+                                }
+                            } catch {
+                                queue.push(fullPath);
+                            }
+                        }
+                    }
+                } catch {
                 }
             }
-            edges.push(...commit.edges);
-        } // collecting all function nodes (deduplicate by id)
-
-        const prunedGraph = removeIsolatedNodes(nodes, edges);
-        const finalNodes = prunedGraph.nodes;
-        const finalEdges = prunedGraph.edges;
-        const isolatedNodesRemoved = prunedGraph.removedCount;
-
-        const callEdgesOnly = finalEdges.filter(e => e.kind === "CALLS");
-        const visualization = buildVisualization(finalNodes, finalEdges);
-
-        const output = {
-            generatedAt: new Date().toISOString(),
-            input: {
-                root: path.resolve(args.root),
-                projectId: args.projectId || null,
-            },
-            summary: {
-                commitsAnalyzed: commitResults.length,
-                filesAnalyzed: commitResults.reduce((s, c) => s + c.filesAnalyzed, 0),
-                functions: finalNodes.length,
-                isolatedNodesRemoved,
-                callEdges: callEdgesOnly.length,
-                crossFileCallEdges: callEdgesOnly.filter(e => e.scope === "cross-file").length,
-                inFileCallEdges: callEdgesOnly.filter(e => e.scope === "in-file").length,
-            },
-            graph: {
-                nodes: finalNodes,
-                edges: finalEdges,
-            },
-            visualization,
-            commits: commitResults.map(c => ({
-                sha: c.sha,
-                commitDirectory: c.commitDirectory,
-                filesAnalyzed: c.filesAnalyzed,
-                functions: c.functionCount,
-                callEdges: c.callEdges,
-                crossFileCallEdges: c.crossFileCallEdges,
-                inFileCallEdges: c.inFileCallEdges,
-            })),
-        };
-
-        const outputPath = args.projectId ? path.resolve(buildAppdataOutputPath(args.projectId)) : path.resolve(buildDefaultOutputPath(args.root));
             
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, JSON.stringify(output, null, 2), "utf8");
+            console.log(`Found ${commitDirs.length} candidate directories`);
+            
+            if (commitDirs.length !== 0) {
+                const sortedCommitDirs = await sortCommitsChronologically(commitDirs); // sorting chronologically
 
-        console.log("Analysis completed");
-        console.log(`Analyzed commits: ${output.summary.commitsAnalyzed}`);
-        console.log(`Analyzed files: ${output.summary.filesAnalyzed}`);
-        console.log(`Functions: ${output.summary.functions}`);
-        console.log(`Removed isolated nodes: ${output.summary.isolatedNodesRemoved}`);
-        console.log(`Call edges: ${output.summary.callEdges} (cross-file: ${output.summary.crossFileCallEdges}, in-file: ${output.summary.inFileCallEdges})`);
-        console.log(`Report: ${outputPath}`);
+                let fullBaseline = await loadFullBaseline(args.projectId) || { // the full baseline: cumulative snapshot of all functions seen so far
+                    generatedAt: new Date().toISOString(),
+                    functions: [],
+                    lastCommitSha: null,  // the continuity check
+                };
+                console.log(`\nLoaded baseline: ${fullBaseline.functions?.length || 0} functions`);
+                if (fullBaseline.functions.length > 0 && !fullBaseline.lastCommitSha) {
+                    console.warn("Legacy baseline without commit tracking detected. Resetting baseline.");
+                    const baselinePath = buildFullBaselineIndexPath(args.projectId);
+                    if (await exists(baselinePath)) await fs.unlink(baselinePath);
+                    fullBaseline = {
+                        generatedAt: new Date().toISOString(),
+                        functions: [],
+                        lastCommitSha: null,
+                    };
+                }
+                // !continuity check: validate baseline continuity
+                if (fullBaseline.lastCommitSha && sortedCommitDirs.length > 0) {
+                    const lastCommitDir = await findCommitDirectoryBySha(commitsBasePath, fullBaseline.lastCommitSha);
+                    let expectedNextSha = null;
+                    if (lastCommitDir) {
+                        try {
+                            const manifestPath = path.join(lastCommitDir, "manifest.json");
+                            const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+                            expectedNextSha = manifest.nextSha || null;
+                        } catch (err) {
+                            console.warn(`Could not read manifest for last commit ${fullBaseline.lastCommitSha}: ${err.message}`);
+                        }
+                    }
+                    const firstCommitSha = path.basename(sortedCommitDirs[0]);
+                    if (!expectedNextSha || firstCommitSha !== expectedNextSha) {
+                        console.warn(`Baseline continuity check failed, expected next commit ${expectedNextSha}, got ${firstCommitSha}\nResetting baseline`);
+                        const baselinePath = buildFullBaselineIndexPath(args.projectId);
+                        if (await exists(baselinePath)) await fs.unlink(baselinePath);
+                        fullBaseline = {
+                            generatedAt: new Date().toISOString(),
+                            functions: [],
+                            lastCommitSha: null,
+                        };
+                    }
+                }
+                let indicesCreated = 0;
+                for (const commitDir of sortedCommitDirs) {
+                    const commitSha = path.basename(commitDir);
+                    
+                    let previousSha = null;
+                    let nextSha = null;
+                    let commitTimestamp = null;  
+                    try {
+                        const manifestPath = path.join(commitDir, "manifest.json"); // reading manifest to get previousSha and nextSha from chronological sorting
+                        const manifestContent = await fs.readFile(manifestPath, "utf8");
+                        const manifest = JSON.parse(manifestContent);
+                        previousSha = manifest.previousSha || null; // used for timeline links, not for diff detection
+                        nextSha = manifest.nextSha || null;
+                        commitTimestamp = manifest.committer?.date || manifest.author?.date || null;
+                        console.log(`Reading manifest links: prev=${previousSha ? previousSha.substring(0, 7) : 'none'}, next=${nextSha ? nextSha.substring(0, 7) : 'none'}`);
+                    } catch (err) {
+                        console.warn(`Could not read manifest for ${commitSha.substring(0, 7)}: ${err.message}`);
+                    }
+                    
+                    // using fullBaseline for diff detection, not the sparse per commit index, since the per commit index.json contains only changed functions, not the full snapshot
+                    // otherwise functions not in the sparse list would be marked as 'added'
+                    const options = {
+                        prevIndexData: fullBaseline && fullBaseline.functions && fullBaseline.functions.length > 0 ? fullBaseline : null,
+                        previousSha: previousSha, // attaching timeline links to functions
+                        nextSha: nextSha,
+                    };
+                    
+                    const result = await analyzeCommitDirectory(commitDir, options);
+                    
+                    const allChangedFunctions = result.functionsWithBoundaries || []; // functionsWithBoundaries now includes all changed functions (added/ modified/ removed)
+                    
+                    for (const func of allChangedFunctions) {
+                        func.previousSha = previousSha;
+                        func.nextSha = nextSha;
+                    }
+                    
+                    console.log(`\n[${result.sha}] commit details:`);
+                    console.log(`\tTotal functions in commit: ${result.functionCount}`);
+                    console.log(`\tChanged functions: ${result.changedFunctionCount}`);
+                    console.log(`\tChange stats: added=${result.changeStats.added}, modified=${result.changeStats.modified}, removed=${result.changeStats.removed}, unchanged=${result.changeStats.unchanged}`);
+                    
+                    if (result.functionCount === 0) { // if there are no typescript/ javacsript functions at all in this commit
+                        console.log(`[${result.sha}] No functions found – updating baseline continuity only`);
+                        fullBaseline.lastCommitSha = result.sha; // !continuity check: update lastCommitSha to keep continuity
+                        await saveFullBaseline(args.projectId, fullBaseline, result.sha);
+                        // no index written, no changes to baseline functions
+                        continue;
+                    }
+                    if (allChangedFunctions.length > 0) {
+                        const indexPath = buildPerCommitFunctionIndexPath(args.projectId, result.sha);
+                        const indexData = {
+                            sha: result.sha,
+                            generatedAt: new Date().toISOString(),
+                            timestamp: commitTimestamp,
+                            changeStats: result.changeStats,
+                            previousSha: previousSha,
+                            nextSha: nextSha,
+                            functions: allChangedFunctions.map(f => ({ // functions array is sparse, meaning contains only changed functions in this commit
+                                name: f.name,
+                                file: f.file || f.repoRelativePath,
+                                simpleName: f.simpleName,
+                                kind: f.kind,
+                                changeType: f.changeType, // added/ modified/ removed
+                                startLine: f.startLine || f.line,
+                                startColumn: f.startColumn || f.column,
+                                endLine: f.endLine,
+                                endColumn: f.endColumn,
+                                previousSha: f.previousSha || null,
+                                nextSha: f.nextSha || null,
+                            })),
+                        };
+                        try {
+                            await fs.mkdir(path.dirname(indexPath), { recursive: true });
+                            await fs.writeFile(indexPath, JSON.stringify(indexData, null, 2), "utf8");
+                            const changedCount = result.changedFunctionCount || result.functionsWithBoundaries.length;
+                            console.log(`[${result.sha}] index written: ${changedCount}/ ${result.functionCount} functions changed`);
+                            indicesCreated++;
+                        } catch (err) {
+                            console.error(`[${result.sha}] Failed to save function index: ${err}`);
+                        }
+                        
+                        const baselineFunctionMap = new Map();
+                        for (const func of fullBaseline.functions) { // updating the full baseline means merging all functions from this commit into the cumulative baseline
+                            const key = `${func.repoRelativePath || func.file}::${func.simpleName}::${func.kind}`;
+                            baselineFunctionMap.set(key, func);
+                        }
+                        
+                        for (const func of result.allFunctions || []) { // adding/ updating all functions from current commit (but don't remove removed functions from baseline)
+                            const key = `${func.repoRelativePath}::${func.simpleName}::${func.kind}`;
+                            baselineFunctionMap.set(key, {
+                                name: func.name,
+                                file: func.file || func.repoRelativePath,
+                                repoRelativePath: func.repoRelativePath,
+                                simpleName: func.simpleName,
+                                kind: func.kind,
+                                startLine: func.startLine,
+                                startColumn: func.startColumn,
+                                endLine: func.endLine,
+                                endColumn: func.endColumn,
+                                contentHash: func.contentHash,
+                            });
+                        }
+                        
+                        for (const func of result.functionsWithBoundaries || []) { // removing functions that were marked as removed in changeStats
+                            if (func.changeType === 'removed') {
+                                const key = `${func.file}::${func.simpleName}::${func.kind}`;
+                                baselineFunctionMap.delete(key);
+                            }
+                        }
+                        
+                        fullBaseline = { // rebuilding the baseline
+                            generatedAt: new Date().toISOString(),
+                            functions: Array.from(baselineFunctionMap.values()),
+                            lastCommitSha: result.sha,  // !continuity check: store last processed sha
+                        };
+                        
+                        if (args.projectId) {
+                            await saveFullBaseline(args.projectId, fullBaseline, result.sha); // !continuity check: pass the sha to saveFullBaseline, but requires ts-ast-tree.js update
+                            console.log(`Baseline updated: ${fullBaseline.functions.length} functions`);
+                            console.log(`[${result.sha}] Baseline saved`);
+                        }
+                    } else {
+                        // there are some unchanged functions in the commit, meaning it is still needed to update lastCommitSha and save baseline
+                        fullBaseline.lastCommitSha = result.sha;
+                        await saveFullBaseline(args.projectId, fullBaseline, result.sha);
+                        console.log(`[${result.sha}] Baseline continuity updated (no changed functions)`);
+                    }
+                }
+                
+                if (args.projectId) {
+                    const historyMap = await buildFunctionHistory(args.projectId); // rebuilding function history map after all commits are processed
+                    await saveFunctionHistory(args.projectId, historyMap);
+                    console.log(`Function history rebuilt: ${historyMap.size} unique functions tracked`);
+                }
+            }
+        } catch (err) {
+            console.error(`Error building per commit indices:`, err.message);
+        }
     }
+
+    // the full project analysis has already been done earlier in the script, that's what it is used for the main graph visualization and output
+    console.log("Analysis completed");
 }
+
 
 run().catch(console.error);

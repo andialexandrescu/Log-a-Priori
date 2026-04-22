@@ -1,7 +1,9 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const os = require("node:os");
 const { createHash } = require("node:crypto");
 const { Node, Project, SyntaxKind, ts } = require("ts-morph");
+const { diff } = require("@tdurieux/dinghy-diff");
 
 const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".jsx", ".js"]);
 
@@ -38,7 +40,7 @@ async function collectFilesRecursive(rootPath) { // called by collectTypeScriptF
         }
 
         for (const entry of entries) {
-            const absolutePath = path.join(current, entry.name); // absoulte path for a subdir inside added/ modified/ removed
+            const absolutePath = path.join(current, entry.name); // absolute path for a subdir inside added/ modified/ removed
             if (entry.isDirectory()) { // skipping excluded directories
                 if (!excludeDirs.has(entry.name)) {
                     stack.push(absolutePath); // queues the folder for further file absolute path extraction for output
@@ -90,9 +92,9 @@ function declarationKey(node) {
     return `${node.getSourceFile().getFilePath()}:${node.getStart()}`; // the file and the line it is first defined at
 }
 
-function getLocation(node) { // converts a ts-morph ast node into a location object
+function getStartLocation(node) { // converts a ts-morph ast node's start/ end position into a location object
     const source = node.getSourceFile();
-    const lc = source.getLineAndColumnAtPos(node.getStart());
+    const lc = source.getLineAndColumnAtPos(node.getStart()); // node.getStart()
     return {
         filePath: source.getFilePath(),
         line: lc.line,
@@ -100,13 +102,30 @@ function getLocation(node) { // converts a ts-morph ast node into a location obj
     };
 }
 
+function getEndLocation(node) { // get the end position of a node
+    const source = node.getSourceFile();
+    const lc = source.getLineAndColumnAtPos(node.getEnd()); // vs node.getEnd()
+    return {
+        filePath: source.getFilePath(),
+        line: lc.line,
+        column: lc.column,
+    };
+}
+
 function getRepoRelativePath(commitDirectory, sourceFilePath) {
-    const relative = path.relative(commitDirectory, sourceFilePath);
-    const segments = relative.split(path.sep);
+    const normalizedCommitDir = commitDirectory.replace(/\\/g, '/');
+    const normalizedSourcePath = sourceFilePath.replace(/\\/g, '/');
+    
+    const relative = path.relative(normalizedCommitDir, normalizedSourcePath);
+    const segments = relative.split(/[\\/]+/);
+    
     if (segments.length <= 1) {
-        return relative;
+        return relative.replace(/\\/g, '/');
     }
-    return segments.slice(1).join("/");
+    
+    const isCommitOp = segments[0] === 'added' || segments[0] === 'modified' || segments[0] === 'removed';
+    const skipFirst = isCommitOp ? 1 : 0;
+    return segments.slice(skipFirst).join("/");
 }
 
 function buildEntityId(sha, sourceFilePath, start, kind, name) {
@@ -159,31 +178,268 @@ function safeSignature(node) {
     return node.getText().replace(/\s+/g, " ").slice(0, 260);
 }
 
-function buildEntityContext(project, commitDirectory, sha) { // only collects functions, methods, lambdas
+function computeStructuralHash(node) { // hash based on normalized ast structure, ignoring whitespace/ comments
+    const text = node.getText();
+    
+    const normalized = text
+        .replace(/\/\/.*$|^\/\*\*[\s\S]*?\*\//gm, '') // removing // and /** */ comments
+        .replace(/\/\*[\s\S]*?\*\//g, '') // removing /* */ comments
+        .replace(/\s+/g, ' ') // normalize whitespace
+        .trim();
+    const hash = hashText(normalized);
+    return hash;
+}
+
+function createFunctionKey(func) { // identifier for a function across commits
+    // key: repoRelativePath + name + kind
+    return `${func.repoRelativePath}::${func.simpleName}::${func.kind}`;
+}
+
+function parseCodeToAST(sourceCode, fileName = 'temp.ts') { // parsing source code into ast for comparison
+    try {
+        const project = new Project();
+        const sourceFile = project.createSourceFile(fileName, sourceCode, { overwrite: true });
+        const nodes = sourceFile.getStatements();
+        if (nodes.length === 0) return null;
+
+        return nodes[0].compilerNode;
+    } catch (err) {
+        console.warn(`Failed to parse code: ${err.message}`);
+        return null;
+    }
+}
+
+function areFunctionsEqualAST(prevFunc, nextFunc) { // comparing two functions using ast structural diff
+    if (!prevFunc?.code || !nextFunc?.code) {
+        return prevFunc?.contentHash === nextFunc?.contentHash; // fall back to hash comparison if source not available
+    }
+    
+    try {
+        const prevAST = parseCodeToAST(prevFunc.code);
+        const nextAST = parseCodeToAST(nextFunc.code);
+        
+        if (!prevAST || !nextAST) {
+            return prevFunc.contentHash === nextFunc.contentHash;
+        }
+        
+        const changes = diff(prevAST, nextAST); // structural diff
+        
+        const isEqual = changes.length === 0;
+        
+        if (!isEqual) {
+            console.log(`Structural changes detected: ${changes.length} operations`);
+        }
+        
+        return isEqual;
+    } catch (err) {
+        console.warn(`Comparison failed: ${err.message} – falling back to hash`);
+        return prevFunc.contentHash === nextFunc.contentHash;
+    }
+}
+
+function compareFunctionsBySha(prevFunc, nextFunc) { // compares two function versions using hash first, then ast diff for precision
+    if (!prevFunc || !nextFunc) {
+        return false;
+    }
+    
+    if (prevFunc.contentHash === nextFunc.contentHash) {
+        return true; // if hashes match, definitely unchanged
+    }
+    
+    const astEqual = areFunctionsEqualAST(prevFunc, nextFunc); // not matching the hash: ast comparison to reduce false positive
+    
+    if (astEqual) {
+        console.log(`Hash mismatch but ast equivalent (likely formatting change)`);
+    }
+    
+    return astEqual;
+}
+
+function buildFullBaselineIndexPath(projectId) { // path to the cumulative full-index.json that tracks all functions ever seen
+    const baseDir = getProjectAppdataPath(projectId);
+    return path.join(baseDir, "analysis", "full-baseline.json");
+}
+
+function getProjectAppdataPath(projectId) { // get appdata path for a project
+    const appData = process.env.APPDATA?.trim();
+    const baseDir = appData 
+        ? path.join(appData, "log-a-priori-desktop-shell", projectId)
+        : path.join(os.homedir(), "AppData", "Roaming", "log-a-priori-desktop-shell", projectId);
+    return baseDir;
+}
+
+async function loadFullBaseline(projectId) { // loads the cumulative full-baseline.json
+    try {
+        const baselinePath = buildFullBaselineIndexPath(projectId);
+        const content = await fs.readFile(baselinePath, "utf8");
+        const parsed = JSON.parse(content);
+        if (!parsed.lastCommitSha) parsed.lastCommitSha = null;
+        return parsed;
+    } catch (err) {
+        return null; // no baseline yet (first run)
+    }
+}
+
+async function saveFullBaseline(projectId, baselineData, lastCommitSha = null) { // saves the cumulative full-baseline.json with all functions seen so far
+    try {
+        const baselinePath = buildFullBaselineIndexPath(projectId);
+        const toSave = {
+            ...baselineData,
+            lastCommitSha: lastCommitSha || baselineData.lastCommitSha || null,
+            generatedAt: new Date().toISOString(),
+        };
+        await fs.mkdir(path.dirname(baselinePath), { recursive: true });
+        await fs.writeFile(baselinePath, JSON.stringify(toSave, null, 2), "utf8");
+    } catch (err) {
+        console.error(`Failed to save full baseline: ${err}`);
+    }
+}
+
+async function sortCommitsChronologically(commitDirs) { // sorts commits by their date from manifest.json
+    const commitData = [];
+    
+    for (const commitDir of commitDirs) {
+        try {
+            const manifestPath = path.join(commitDir, "manifest.json");
+            const content = await fs.readFile(manifestPath, "utf8");
+            const manifest = JSON.parse(content);
+            
+            let dateValue = manifest.committer?.date || manifest.author?.date;
+            
+            let timestamp = 0;
+            if (dateValue) {
+                if (typeof dateValue === 'number') {
+                    timestamp = dateValue;
+                } else if (typeof dateValue === 'string') {
+                    timestamp = new Date(dateValue).getTime();
+                }
+            }
+            
+            const dateStr = timestamp ? new Date(timestamp).toISOString() : 'unknown';
+            commitData.push({ dir: commitDir, timestamp });
+        } catch (err) {
+            console.warn(`No manifest for ${path.basename(commitDir)}`);
+            commitData.push({ dir: commitDir, timestamp: 0 });
+        }
+    }
+    
+    commitData.sort((a, b) => {
+        if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+        return a.dir.localeCompare(b.dir);
+    });
+    
+    console.log(`Final order (${commitData.length} commits):`);
+    commitData.forEach((d, idx) => {
+        const timestamp = d.timestamp ? new Date(d.timestamp).toISOString() : 'unknown';
+        console.log(`\t${idx + 1}. ${path.basename(d.dir).substring(0, 7)} (${timestamp})`);
+    });
+    
+    for (let idx = 0; idx < commitData.length; idx++) {
+        const manifestPath = path.join(commitData[idx].dir, "manifest.json");
+        try {
+            const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+            manifest.previousSha = idx > 0 ? path.basename(commitData[idx - 1].dir) : null;
+            manifest.nextSha = idx < commitData.length - 1 ? path.basename(commitData[idx + 1].dir) : null;
+            await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+            console.log(`Updated ${path.basename(commitData[idx].dir).substring(0, 7)}: prev=${manifest.previousSha ? manifest.previousSha.substring(0, 7) : "none"}, next=${manifest.nextSha ? manifest.nextSha.substring(0, 7) : "none"}`);
+        } catch (err) {
+            console.warn(`Failed to update manifest for ${path.basename(commitData[idx].dir)}:`, err.message);
+        }
+    }
+    
+    return commitData.map(d => d.dir);
+}
+
+function detectFunctionChanges(prevIndexData, nextFunctions) { // compares functions and returns only those that changed using ast diff
+    if (!prevIndexData || !prevIndexData.functions) { // no previous data, all functions are new
+        console.log(`No previous index – marking all ${nextFunctions.length} functions as 'added'`);
+        return nextFunctions.map(f => ({ ...f, changeType: 'added' }));
+    }
+
+    const prevMap = new Map();
+    for (const func of prevIndexData.functions) {
+        const key = createFunctionKey(func);
+        prevMap.set(key, func);
+    }
+    
+    const changedFunctions = [];
+    let addedCount = 0, modifiedCount = 0, removedCount = 0, unchangedCount = 0;
+    console.log(`Starting ast based change detection (${prevIndexData.functions.length} baseline functions vs ${nextFunctions.length} current functions)`);
+    
+    for (const nextFunc of nextFunctions) {
+        const key = createFunctionKey(nextFunc);
+        const prevFunc = prevMap.get(key);
+
+        if (!prevFunc) {
+            console.log(`\tADDED: ${key}`);
+            changedFunctions.push({ ...nextFunc, changeType: 'added' });
+            addedCount++;
+        } else if (compareFunctionsBySha(prevFunc, nextFunc)) {
+            console.log(`\tUNCHANGED: ${key}`);
+            unchangedCount++;
+        } else {
+            console.log(`\tMODIFIED: ${key} (hash ${prevFunc.contentHash?.substring(0, 7)} -> ${nextFunc.contentHash?.substring(0, 7)})`);
+            changedFunctions.push({ ...nextFunc, changeType: 'modified' });
+            modifiedCount++;
+        }
+    }
+
+    const nextKeys = new Set(nextFunctions.map(createFunctionKey));
+    for (const [key, prevFunc] of prevMap.entries()) {
+        if (!nextKeys.has(key)) {
+            console.log(`\tREMOVED: ${key}`);
+            changedFunctions.push({ ...prevFunc, changeType: 'removed' });
+            removedCount++;
+        }
+    }
+
+    console.log(`Return: ${changedFunctions.length} changed functions out of ${nextFunctions.length} in current commit`);
+    return changedFunctions;
+}
+
+function buildEntityContext(project, commitDirectory, sha, previousSha = null, nextSha = null) { // only collects functions, methods, lambdas; now attaches commit links for timeline navigation
     const context = {
         functions: [], // list of function entities
         functionById: new Map(), // id and function entity
         functionByDeclarationKey: new Map(), // declaration key ("src/utils/helper.ts:200") and function entity
         functionsBySimpleName: new Map(), // simpleName and list (for resolving)
-        functionsByFile: new Map(),   // filePath and list (for nested checks)
+        functionsByFile: new Map(), // filePath and list (for nested checks)
+        repository: null, // will be set if manifest.json exists
     };
+
+    const manifestPath = path.join(commitDirectory, "manifest.json");
+    try {
+        const manifestContent = require("fs").readFileSync(manifestPath, "utf8");
+        const manifest = JSON.parse(manifestContent);
+        if (manifest.repository) {
+            context.repository = manifest.repository;
+        }
+    } catch {
+    }
 
     for (const sourceFile of project.getSourceFiles()) {
         const repoRelativePath = getRepoRelativePath(commitDirectory, sourceFile.getFilePath());
 
         const addFunction = (node, kind, name, simpleName) => {
-            const loc = getLocation(node);
+            const startLoc = getStartLocation(node);
+            const endLoc = getEndLocation(node);
             const id = buildEntityId(sha, sourceFile.getFilePath(), node.getStart(), kind, name);
             const entity = {
                 id,
                 sha,
+                previousSha: previousSha,
+                nextSha: nextSha,
                 kind,
                 name,
                 simpleName,
                 repoRelativePath,
-                filePath: loc.filePath,
-                line: loc.line,
-                column: loc.column,
+                file: repoRelativePath, // alias for normalized repo relative path
+                repository: context.repository, // add repository field to each entity
+                filePath: startLoc.filePath,
+                startLine: startLoc.line,
+                startColumn: startLoc.column,
+                endLine: endLoc.line,
+                endColumn: endLoc.column,
                 start: node.getStart(),
                 end: node.getEnd(),
                 signature: safeSignature(node),
@@ -198,10 +454,10 @@ function buildEntityContext(project, commitDirectory, sha) { // only collects fu
                 context.functionsBySimpleName.set(simpleName, []);
             }
             context.functionsBySimpleName.get(simpleName).push(entity);
-            if (!context.functionsByFile.has(loc.filePath)) {
-                context.functionsByFile.set(loc.filePath, []);
+            if (!context.functionsByFile.has(startLoc.filePath)) {
+                context.functionsByFile.set(startLoc.filePath, []);
             }
-            context.functionsByFile.get(loc.filePath).push(entity);
+            context.functionsByFile.get(startLoc.filePath).push(entity);
         };
 
         const topLevelFuncs = sourceFile.getFunctions();
@@ -277,15 +533,18 @@ function extractCallEdges(context, edges) { // extracts CALLS edges between func
             const funcFilePath = func.filePath.split(path.sep).join("/");
             const targetFilePath = target.filePath.split(path.sep).join("/");
             const isCrossFile = funcFilePath !== targetFilePath;
-            const loc = getLocation(callExpr);
+            const startLoc = getStartLocation(callExpr);
+            const endLoc = getEndLocation(callExpr);
             const edge = {
                 kind: "CALLS",
                 from: func.id,
                 to: target.id,
                 label: callExpr.getExpression().getText(),
-                filePath: loc.filePath,
-                line: loc.line,
-                column: loc.column,
+                filePath: startLoc.filePath,
+                startLine: startLoc.line,
+                startColumn: startLoc.column,
+                endLine: endLoc.line,
+                endColumn: endLoc.column,
                 resolved: true,
                 scope: isCrossFile ? "cross-file" : "in-file",
                 directed: true,
@@ -323,7 +582,8 @@ function extractUsesEdges(context, edges) { // extracts function references (mid
             for (const targetFunc of targetFuncs) {
                 if (targetFunc.id === func.id) continue; // self references
 
-                const loc = getLocation(ident);
+                const startLoc = getStartLocation(ident);
+                const endLoc = getEndLocation(ident);
                 const funcFilePath = func.filePath.split(path.sep).join("/");
                 const targetFilePath = targetFunc.filePath.split(path.sep).join("/");
                 const isCrossFile = funcFilePath !== targetFilePath;
@@ -333,9 +593,11 @@ function extractUsesEdges(context, edges) { // extracts function references (mid
                     from: func.id,
                     to: targetFunc.id,
                     label: name,
-                    filePath: loc.filePath,
-                    line: loc.line,
-                    column: loc.column,
+                    filePath: startLoc.filePath,
+                    startLine: startLoc.line,
+                    startColumn: startLoc.column,
+                    endLine: endLoc.line,
+                    endColumn: endLoc.column,
                     resolved: true,
                     scope: isCrossFile ? "cross-file" : "in-file",
                     directed: true,
@@ -389,15 +651,18 @@ function extractModuleImportEdges(context, project, edges) { // for CommonJS whe
 
                 const targetFuncs = context.functionsBySimpleName.get(requiredName) || []; // name matching
                 for (const targetFunc of targetFuncs) {
-                    const loc = getLocation(usage);
+                    const startLoc = getStartLocation(usage);
+                    const endLoc = getEndLocation(usage);
                     const edge = {
                         kind: "USES",
                         from: `module:${filePath}`,
                         to: targetFunc.id,
                         label: requiredName,
-                        filePath: loc.filePath,
-                        line: loc.line,
-                        column: loc.column,
+                        filePath: startLoc.filePath,
+                        startLine: startLoc.line,
+                        startColumn: startLoc.column,
+                        endLine: endLoc.line,
+                        endColumn: endLoc.column,
                         resolved: true,
                         scope: filePath === targetFunc.filePath ? "in-file" : "cross-file",
                         directed: true,
@@ -446,16 +711,19 @@ function extractJsxComponentUsesEdges(context, edges) { // original impl: extrac
             const funcFilePath = func.filePath.split(path.sep).join("/");
             const targetFilePath = target.filePath.split(path.sep).join("/");
             const isCrossFile = funcFilePath !== targetFilePath;
-            const loc = getLocation(jsxElement);
+            const startLoc = getStartLocation(jsxElement);
+            const endLoc = getEndLocation(jsxElement);
 
             const edge = {
                 kind: "CALLS",
                 from: func.id,
                 to: target.id,
                 label: componentName,
-                filePath: loc.filePath,
-                line: loc.line,
-                column: loc.column,
+                filePath: startLoc.filePath,
+                startLine: startLoc.line,
+                startColumn: startLoc.column,
+                endLine: endLoc.line,
+                endColumn: endLoc.column,
                 resolved: true,
                 scope: isCrossFile ? "cross-file" : "in-file",
                 directed: true,
@@ -470,9 +738,11 @@ function extractJsxComponentUsesEdges(context, edges) { // original impl: extrac
     }
 }
 
-// yet to integrate
-async function analyzeCommitDirectory(commitDirectory) { // analyzes a single commit directory – functions and call edges
-    // parses added, modified, and removed so that edges can reference functions from any operation directory
+/* previous implementation replaced by analyzeFullProject
+async function analyzeCommitDirectory(commitDirectory, options = {}) { // analyzes a single commit directory – function boundaries with diff detection
+    // parses added, modified, and removed files to extract function boundary information
+    // detects which functions have changed since the previous commit
+    // edges are no longer generated here; they are built by analyzeFullProject instead
 
     const project = createProject();
 
@@ -482,70 +752,150 @@ async function analyzeCommitDirectory(commitDirectory) { // analyzes a single co
     }
 
     const sha = path.basename(commitDirectory);
-    const context = buildEntityContext(project, commitDirectory, sha);
+    const context = buildEntityContext(project, commitDirectory, sha, options.previousSha, options.nextSha);
 
-    const edges = [];
-    extractCallEdges(context, edges); // includes both cross-file and in-file
-    extractUsesEdges(context, edges); // function references (middleware, callbacks)
-    extractModuleImportEdges(context, project, edges); // CommonJS module imports/ uses
-    extractJsxComponentUsesEdges(context, edges); // jsx/ component usage edges
-
-    const functions = context.functions.map(f => {
+    const allFunctions = context.functions.map(f => {
         const { node, ...rest } = f;
-        return { ...rest, type: "entity" }; // removes node references and adds required 'type' field
+        return rest; // includes name, file, line, column, endLine, endColumn, repoRelativePath, contentHash
     });
 
-    const callEdges = edges.filter(e => e.kind === "CALLS").length;
-    const crossFileEdges = edges.filter(e => e.scope === "cross-file").length;
-    const inFileEdges = edges.filter(e => e.scope === "in-file").length;
+    // detecting changes if previous index is available
+    let functionsWithBoundaries = allFunctions;
+    let changeStats = {
+        added: 0,
+        modified: 0,
+        removed: 0,
+        unchanged: 0,
+    };
+
+    if (options.prevIndexData) {
+        console.log(`prevIndexData structure: functions=${options.prevIndexData.functions?.length || 'UNDEFINED'}`);
+        const changedFunctions = detectFunctionChanges(options.prevIndexData, allFunctions);
+        functionsWithBoundaries = changedFunctions; // include all changed functions (including removed as tombstones)
+
+        for (const func of changedFunctions) {
+            changeStats[func.changeType]++;
+        }
+        changeStats.unchanged = allFunctions.length - (changeStats.added + changeStats.modified);
+    } else {
+        console.log(`prevIndexData is null/ undefined, marking all ${allFunctions.length} as added`);
+        functionsWithBoundaries = allFunctions.map(f => ({ ...f, changeType: 'added' }));
+        changeStats.added = allFunctions.length;
+    }
 
     const repoFiles = [...sourceFiles].map((file) => getRepoRelativePath(commitDirectory, file)).sort((a, b) => a.localeCompare(b));
 
     console.log(`\n[${sha}] analyzed files (${repoFiles.length})`);
-
-    const relationCounts = new Map(); // edge and number of times the edge appears across commit
-    for (const edge of edges) {
-        const fromFn = context.functionById.get(edge.from); // caller
-        const toFn = context.functionById.get(edge.to); // callee
-        if (!fromFn || !toFn) {
-            continue;
-        }
-
-        const fromLabel = `${fromFn.name} [${fromFn.repoRelativePath}]`;
-        const toLabel = `${toFn.name} [${toFn.repoRelativePath}]`;
-        const scope = edge.scope || "unknown";
-        const key = `${scope}|${edge.kind}|${fromLabel}|${toLabel}`; // cross-file|CALLS|fromLabel []|toLabel []"
-        relationCounts.set(key, (relationCounts.get(key) || 0) + 1); // ensure deduplication based on concatenated key
-    }
-
-    const sortedRelations = [...relationCounts.entries()].sort((a, b) => {
-        if (b[1] !== a[1]) {
-            return b[1] - a[1]; // highest count
-        }
-        return a[0].localeCompare(b[0]); // alphabetical
-    });
-
-    console.log(`[${sha}] function relationships (${sortedRelations.length})`);
-    if (sortedRelations.length === 0) {
-        console.log("  - none");
-    } else {
-        for (const [key, count] of sortedRelations) {
-            const [scope, kind, fromLabel, toLabel] = key.split("|");
-            console.log(`\t- ${fromLabel} -${kind}/${scope}-> ${toLabel}: ${count} repetitions for commit`);
-        }
+    console.log(`[${sha}] functions found: ${allFunctions.length}`);
+    if (options.prevIndexData) {
+        console.log(`[${sha}] changes: +${changeStats.added} modified: ${changeStats.modified} removed: ${changeStats.removed} (unchanged: ${changeStats.unchanged})`);
     }
 
     return {
         sha,
         commitDirectory,
         filesAnalyzed: sourceFiles.length,
-        functionCount: functions.length,
-        callEdges,
-        totalEdges: edges.length,
-        crossFileEdges,
-        inFileEdges,
-        functions,
-        edges,
+        functionCount: allFunctions.length,
+        changedFunctionCount: functionsWithBoundaries.length,
+        changeStats,
+        functionsWithBoundaries,
+        allFunctions, // include all functions for baseline update
+    };
+}*/
+
+async function analyzeCommitDirectory(commitDirectory, options = {}) { // parsing only the files that actually changed in this commit
+    const project = createProject();
+    const sourceFiles = await collectTypeScriptFiles(commitDirectory);
+    for (const file of sourceFiles) {
+        project.addSourceFileAtPath(file);
+    }
+
+    const sha = path.basename(commitDirectory);
+    const context = buildEntityContext(project, commitDirectory, sha, options.previousSha, options.nextSha);
+
+    let allFunctions = [];
+    if (options.prevIndexData && options.prevIndexData.functions && options.prevIndexData.functions.length > 0) {
+        const fullFunctionsMap = new Map();
+        for (const func of options.prevIndexData.functions) {
+            const pathKey = func.repoRelativePath || func.file;
+            const key = `${pathKey}::${func.simpleName}::${func.kind}`;
+            // starting with a copy of all functions from the previous baseline
+            fullFunctionsMap.set(key, { ...func }); // building the complete function set for this commit
+        }
+
+        for (const func of context.functions) {
+            const key = `${func.repoRelativePath}::${func.simpleName}::${func.kind}`;
+            fullFunctionsMap.set(key, func); // overwriting with functions parsed from added/ modified files in this commit
+        }
+
+        let manifest;
+        try {
+            const manifestPath = path.join(commitDirectory, "manifest.json");
+            const manifestContent = await fs.readFile(manifestPath, "utf8");
+            manifest = JSON.parse(manifestContent); // removed functions whose entire file was deleted, listed in manifest's 'removed'
+        } catch (err) {
+            console.warn(`[${sha}] Could not read manifest.json: ${err.message}`);
+            manifest = { removed: [] };
+        }
+
+        if (manifest.removed && Array.isArray(manifest.removed)) {
+            for (const removedFile of manifest.removed) {
+                const normalizedRemoved = removedFile.replace(/\\/g, '/');
+                for (const [key, func] of fullFunctionsMap.entries()) {
+                    const funcPath = (func.repoRelativePath || func.file || '').replace(/\\/g, '/');
+                    if (funcPath === normalizedRemoved) {
+                        fullFunctionsMap.delete(key);
+                    }
+                }
+            }
+        }
+
+        allFunctions = Array.from(fullFunctionsMap.values()); // fullFunctionsMap contains the complete state for this commit
+    } else {
+        allFunctions = context.functions.map(f => {
+            const { node, ...rest } = f;
+            return rest;
+        }); // first commit or no baseline, using the functions we parsed
+    }
+
+    let functionsWithBoundaries = [];
+    let changeStats = {
+        added: 0,
+        modified: 0,
+        removed: 0,
+        unchanged: 0,
+    };
+
+    if (options.prevIndexData && options.prevIndexData.functions && options.prevIndexData.functions.length > 0) {
+        const changedFunctions = detectFunctionChanges(options.prevIndexData, allFunctions); // detecting changes by comparing with the previous baseline
+        functionsWithBoundaries = changedFunctions;
+
+        for (const func of changedFunctions) {
+            changeStats[func.changeType]++;
+        }
+        changeStats.unchanged = allFunctions.length - (changeStats.added + changeStats.modified);
+    } else {
+        functionsWithBoundaries = allFunctions.map(f => ({ ...f, changeType: 'added' })); // no previous data, all functions are considered 'added'
+        changeStats.added = allFunctions.length;
+    }
+
+    const repoFiles = [...sourceFiles].map(file => getRepoRelativePath(commitDirectory, file)).sort();
+
+    console.log(`\n[${sha}] analyzed files (${repoFiles.length})`);
+    console.log(`[${sha}] functions found: ${allFunctions.length}`);
+    if (options.prevIndexData) {
+        console.log(`[${sha}] changes: +${changeStats.added} modified: ${changeStats.modified} removed: ${changeStats.removed} (unchanged: ${changeStats.unchanged})`);
+    }
+
+    return {
+        sha,
+        commitDirectory,
+        filesAnalyzed: sourceFiles.length,
+        functionCount: allFunctions.length,
+        changedFunctionCount: functionsWithBoundaries.length,
+        changeStats,
+        functionsWithBoundaries,
+        allFunctions,
     };
 }
 
@@ -558,7 +908,7 @@ async function analyzeFullProject(projectRoot) { // analyzes the entire project 
         try {
             project.addSourceFileAtPath(file);
         } catch (err) {
-            console.error(`[ERROR] Failed to parse ${file}: ${err.message}`);
+            console.error(`Failed to parse ${file}: ${err.message}`);
         }
     }
 
@@ -576,6 +926,9 @@ async function analyzeFullProject(projectRoot) { // analyzes the entire project 
         return { ...rest, type: "entity" }; // removes node references and adds required 'type' field
     });
 
+    // to review later on: for full project analysis, functionsWithBoundaries = functions
+    const functionsWithBoundaries = functions;
+
     const callEdges = edges.filter(e => e.kind === "CALLS").length;
     const crossFileEdges = edges.filter(e => e.scope === "cross-file").length;
     const inFileEdges = edges.filter(e => e.scope === "in-file").length;
@@ -586,7 +939,7 @@ async function analyzeFullProject(projectRoot) { // analyzes the entire project 
 
     const repoFiles = sourceFiles.map(getProjectRelativePath).sort((a, b) => a.localeCompare(b));
 
-    console.log(`\n[full-project] analyzed files (${repoFiles.length})`);
+    console.log(`\nFull project: analyzed files (${repoFiles.length})`);
 
     const relationCounts = new Map(); // edge and number of times the edge appears
     for (const edge of edges) {
@@ -610,7 +963,7 @@ async function analyzeFullProject(projectRoot) { // analyzes the entire project 
         return a[0].localeCompare(b[0]); // alphabetical
     });
 
-    console.log(`[full-project] function relationships (${sortedRelations.length})`);
+    console.log(`Full project: function relationships (${sortedRelations.length})`);
     if (sortedRelations.length === 0) {
         console.log("  - none");
     } else {
@@ -630,8 +983,9 @@ async function analyzeFullProject(projectRoot) { // analyzes the entire project 
         crossFileEdges,
         inFileEdges,
         functions,
+        functionsWithBoundaries,
         edges,
     };
 }
 
-module.exports = { analyzeCommitDirectory, analyzeFullProject };
+module.exports = { analyzeCommitDirectory, analyzeFullProject, loadFullBaseline, saveFullBaseline, buildFullBaselineIndexPath, sortCommitsChronologically };

@@ -171,7 +171,6 @@ function registerIpc(): void {
         "--max-old-space-size=4096",
         path.join(runtimePaths.repoRoot, "workflow-app", "scripts", "analyze-recursion.js"), // running the script from this repo root
         projectRoot,
-        "--full-project", // yet to fully port the per commit analysis idea
         "--project-id",
         projectId
       ], { cwd: runtimePaths.repoRoot });
@@ -179,6 +178,7 @@ function registerIpc(): void {
       child.child.stdout?.on("data", (data: Buffer) => {
         const line = data.toString().trim();
         if (line) {
+          console.log(`[KG Analysis] ${line}`);
           mainWindow?.webContents.send("desktop:kg-analysis-progress", { message: line });
         }
       });
@@ -186,6 +186,7 @@ function registerIpc(): void {
       child.child.stderr?.on("data", (data: Buffer) => {
         const line = data.toString().trim();
         if (line) {
+          console.error(`[KG Analysis] ${line}`);
           mainWindow?.webContents.send("desktop:kg-analysis-progress", { message: line, error: true });
         }
       });

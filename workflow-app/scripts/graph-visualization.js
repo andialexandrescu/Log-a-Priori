@@ -5,9 +5,10 @@ function fileOf(node) {
 function toVisualizationNode(node) {
     return {
         key: node.id,
-        name: node.name || node.simpleName || node.id,
+        name: node.simpleName || node.name || node.id,
         file: fileOf(node),
         line: typeof node.line === "number" ? node.line : 0,
+        kind: node.kind,
     };
 }
 

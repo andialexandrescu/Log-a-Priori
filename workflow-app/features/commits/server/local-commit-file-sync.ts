@@ -127,6 +127,8 @@ async function writeManifest(params: { commitDirectory: string; repository: stri
         modified: params.commit.modified,
         removed: params.commit.removed,
         exportedAt: new Date().toISOString(),
+        previousSha: null as string | null, // will be populated after chronological sorting
+        nextSha: null as string | null,
     };
 
     await fs.mkdir(params.commitDirectory, { recursive: true });
