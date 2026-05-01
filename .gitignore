@@ -10,3 +10,8 @@ workflow-app/.config
 workflow-app/tools
 desktop-shell/resources/pocketbase/pb_data
 desktop-shell/resources/pocketbase/pb_migrations
+workflow-app/scripts/embed_cache
+workflow-app/scripts/preprocessed_graphs
+workflow-app/scripts/__pycache__
+workflow-app/scripts/dgi_encoder_universal.pt
+workflow-app/scripts/nl_queries.json
