@@ -3,13 +3,15 @@ import { InferRequestType, InferResponseType } from "hono";
 import { client } from "@/lib/rpc";
 import { toast } from "sonner";
 
-type RawResponseType = InferResponseType<(typeof client.api.projects)[":projectId"]["members"][":memberId"]["credentials"][":credentialId"]["$patch"]>;
-type SuccessResponseType = Extract<RawResponseType, { data: any }>;
-type RequestType = InferRequestType<(typeof client.api.projects)[":projectId"]["members"][":memberId"]["credentials"][":credentialId"]["$patch"]>;
-
+type UpdateCredentialResponse = {
+    data: unknown;
+    backfill?: { fetchedFromGithub: number; created: number };
+    reset?: { deletedWebhookEvents: number };
+};
+type RequestType = InferRequestType<(typeof client.api.projects)[":projectId"]["users"][":userId"]["credentials"][":credentialId"]["$patch"]>;
 export type UpdateCredentialInput = {
     projectId: RequestType["param"]["projectId"];
-    memberId: RequestType["param"]["memberId"];
+    userId: RequestType["param"]["userId"];
     credentialId: RequestType["param"]["credentialId"];
     api_keys: RequestType["json"]["api_keys"];
     api_limitations?: RequestType["json"]["api_limitations"];
@@ -18,10 +20,10 @@ export type UpdateCredentialInput = {
 export const useUpdateCredential = () => {
     const queryClient = useQueryClient();
 
-    const mutation = useMutation<SuccessResponseType, Error, UpdateCredentialInput>({
-        mutationFn: async ({ projectId, memberId, credentialId, ...json }) => {
+    const mutation = useMutation<UpdateCredentialResponse, Error, UpdateCredentialInput>({
+        mutationFn: async ({ projectId, userId, credentialId, ...json }) => {
             const response = await fetch( // doing this manually since it's not be fully typed
-                `/api/projects/${projectId}/members/${memberId}/credentials/${credentialId}`,
+                `/api/projects/${projectId}/users/${userId}/credentials/${credentialId}`,
                 {
                     method: 'PATCH',
                     headers: {
@@ -37,13 +39,29 @@ export const useUpdateCredential = () => {
                 throw new Error(result.error || "Failed to update credential");
             }
 
-            return { data: result.data };
+            return result;
         },
-        onSuccess: async (_data, variables) => {
-            await queryClient.invalidateQueries({
-                queryKey: ["projects", variables.projectId, "members", variables.memberId, "credentials"],
-            });
-            toast.success("Credential updated successfully");
+        onSuccess: async (result, variables) => {
+            await Promise.all([
+                queryClient.invalidateQueries({
+                    queryKey: ["projects", variables.projectId, "users", variables.userId, "credentials"],
+                }),
+                queryClient.invalidateQueries({
+                    queryKey: ["projects", variables.projectId, "users", variables.userId, "webhook-events"],
+                }),
+                queryClient.invalidateQueries({
+                    queryKey: ["projects", variables.projectId, "users", variables.userId, "commits"],
+                }),
+            ]);
+
+            const created = result.backfill?.created;
+            if (typeof created === "number") {
+                toast.success(
+                    `GitHub configuration updated. Imported ${created} commit${created === 1 ? "" : "s"} from the repository.`
+                );
+            } else {
+                toast.success("GitHub configuration updated");
+            }
         },
         onError: (error) => {
             console.error("Failed to update credential:", error.message);

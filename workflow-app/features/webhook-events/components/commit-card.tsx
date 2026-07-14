@@ -1,7 +1,6 @@
 import { FileText, FilePlus, FileMinus } from "lucide-react";
 
 interface CommitCardProps {
-    shortId: string;
     message: string;
     timeLabel: string;
     addedCount: number;
@@ -9,15 +8,10 @@ interface CommitCardProps {
     removedCount: number;
 }
 
-export function CommitCard({ shortId, message, timeLabel, addedCount, modifiedCount, removedCount}: CommitCardProps) {
+export function CommitCard({ message, timeLabel, addedCount, modifiedCount, removedCount }: CommitCardProps) {
     return (
         <div className="group border border-border hover:border-ring rounded-lg p-3 hover:shadow-md transition-all bg-card/50 hover:bg-card h-full flex flex-col">
-            <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs bg-muted px-2 py-1 rounded font-semibold group-hover:bg-muted-foreground/20">
-                        {shortId}
-                    </span>
-                </div>
+            <div className="flex items-start justify-start mb-2">
                 <span className="text-xs text-muted-foreground">
                     {timeLabel}
                 </span>

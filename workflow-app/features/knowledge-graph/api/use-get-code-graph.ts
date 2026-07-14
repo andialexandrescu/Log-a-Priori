@@ -32,14 +32,6 @@ export const useGetCodeGraph = (projectId: string) => {
                     throw new Error(String(message));
                 }
 
-                if (typeof json === "object" && json !== null && "data" in json && json.data === null) {
-                    const notFoundMessage =
-                        "message" in json && typeof json.message === "string"
-                            ? json.message
-                            : "Run the extractor first to generate analysis/ts-code-graph.json";
-                    toast.error(notFoundMessage);
-                }
-
                 return json as ResponseType;
             } catch (error) {
                 toast.error("Failed to load knowledge graph");

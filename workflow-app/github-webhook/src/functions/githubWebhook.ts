@@ -49,12 +49,12 @@ export async function githubWebhook(request: HttpRequest, context: InvocationCon
         const [owner, repo] = repoFullname.split('/');
 
         let credential: any;
-        let memberId: string;
+        let userId: string;
         let projectId: string;
         try {
             const filter = `(api_keys.owner='${owner}' && api_keys.repo='${repo}')`;
             const encodedFilter = encodeURIComponent(filter);
-            const searchUrl = `${pocketbaseUrl}/api/collections/credentials/records?filter=${encodedFilter}&expand=member.project`;
+            const searchUrl = `${pocketbaseUrl}/api/collections/credentials/records?filter=${encodedFilter}&expand=project`;
             context.log('Search url:', searchUrl);
             
             const response = await fetch(searchUrl, {
@@ -82,10 +82,10 @@ export async function githubWebhook(request: HttpRequest, context: InvocationCon
             }
 
             credential = data.items[0];
-            memberId = credential.member;
-            projectId = credential.expand?.member?.expand?.project?.id;
-            if (!projectId) {
-                context.log('Could not determine project ID from credential');
+            userId = credential.user;
+            projectId = credential.project || credential.expand?.project?.id;
+            if (!userId || !projectId) {
+                context.log('Could not determine user or project id from credential');
                 return { status: 500, body: 'Internal Server Error' };
             }
         } catch (err) {
@@ -106,7 +106,7 @@ export async function githubWebhook(request: HttpRequest, context: InvocationCon
         const event = request.headers.get('x-github-event');
         if (backendUrl && backendToken) {
             try {
-                await fetch(`${backendUrl}/api/projects/${projectId}/members/${memberId}/webhook-events`, {
+                await fetch(`${backendUrl}/api/projects/${projectId}/users/${userId}/webhook-events`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',

@@ -9,28 +9,28 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { useCreateCredential } from "../api/use-create-credential";
 import { useUpdateCredential } from "../api/use-update-credential";
-import { useGetMemberCredential } from "../api/use-get-member-credential";
+import { useGetUserCredential } from "../api/use-get-member-credential";
 import { createCredentialsSchema } from "../schemas";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, CraftButton, CraftButtonLabel, CraftButtonIcon } from "@/components/ui/button";
 import { ArrowUpRightIcon, AlertCircleIcon } from "lucide-react";
 import { toast } from "sonner";
 import { CheckIcon, CopyIcon } from "lucide-react";
-
 interface CredentialProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     projectId: string;
-    memberId: string;
+    userId: string;
     mode?: "create" | "edit";
 }
 
-export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId, mode = "create"}: CredentialProps) => {
+export const CreateCredentialDialog = ({open, onOpenChange, projectId, userId, mode = "create"}: CredentialProps) => {
     const [createdCredential, setCreatedCredential] = useState<any>(null);
     const [copied, setCopied] = useState(false);
     const createCredential = useCreateCredential();
     const updateCredential = useUpdateCredential();
-    const { data: existingCredential, isLoading: isLoadingCredential } = useGetMemberCredential(projectId, memberId);
+    const { data: credentialData, isLoading: isLoadingCredential } = useGetUserCredential(projectId, userId);
+    const existingCredential = credentialData?.credential ?? null;
 
     const form = useForm<z.output<typeof createCredentialsSchema>>({
         resolver: zodResolver(createCredentialsSchema),
@@ -69,17 +69,12 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId,
     const onSubmit = (values: z.infer<typeof createCredentialsSchema>) => {
         if (mode === "edit" && existingCredential?.id) {
             updateCredential.mutate(
-                { projectId, memberId, credentialId: existingCredential.id, ...values },
-                {
-                    onSuccess: () => {
-                        toast.success("Credential updated successfully");
-                        handleClose();
-                    }
-                }
+                { projectId, userId, credentialId: existingCredential.id, ...values },
+                { onSuccess: () => handleClose() }
             );
         } else {
             createCredential.mutate(
-                { projectId, memberId, ...values },
+                { projectId, userId, ...values },
                 {
                     onSuccess: (data) => {
                         // backfill will happen via auto refresh when project mounts
@@ -137,6 +132,12 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId,
                     </div>
                 ) : !createdCredential ? (
                     <Form {...form}>
+                        {mode === "edit" && (
+                            <p className="mb-2 text-xs text-muted-foreground">
+                                Saving clears this project&apos;s commit folders (yours and teammates&apos;) and
+                                PocketBase webhook events, then re-imports commits from the repository you configure
+                            </p>
+                        )}
                         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-2">
                             <FormField name="api_keys.token" control={form.control} render={({ field }) => (
                                     <FormItem>
@@ -199,7 +200,7 @@ export const CreateCredentialDialog = ({open, onOpenChange, projectId, memberId,
                 ) : (
                     <div className="space-y-2">
                         <p className="text-xs text-muted-foreground">
-                            Your GitHub webhook has been configured, save this secret
+                            Webhook secret (save for your records)
                         </p>
                         <div className="flex items-center gap-2 p-2 bg-muted rounded-md">
                             <code className="flex-1 font-mono text-xs break-all">

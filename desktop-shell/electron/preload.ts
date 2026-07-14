@@ -16,19 +16,29 @@ const electron = require("electron") as {
 const { contextBridge, ipcRenderer } = electron;
 
 contextBridge.exposeInMainWorld("desktopControl", {
-  // renderer can't directly use next apis, meaning that the renderer calls these functions via window.desktopControl.function() and the main process handles them via ipc
   start: () => ipcRenderer.invoke("desktop:start"),
   stop: () => ipcRenderer.invoke("desktop:stop"),
   getStatus: () => ipcRenderer.invoke("desktop:status") as Promise<ServiceStatus[]>,
 
-  getProjectCommitStorageRootDirectory: (projectId: string) => 
-    ipcRenderer.invoke("desktop:get-project-commit-storage-root-directory", projectId) as Promise<string>,
+  getProjectCommitStorageRootDirectory: (userId: string, projectId: string) => 
+    ipcRenderer.invoke("desktop:get-project-commit-storage-root-directory", userId, projectId) as Promise<string>,
 
-  selectProjectRootDirectory: (projectId?: string) => ipcRenderer.invoke("desktop:select-project-root-directory", projectId) as Promise<string | null>,
-  getProjectRootDirectory: (projectId?: string) => ipcRenderer.invoke("desktop:get-project-root-directory", projectId) as Promise<string | null>,
+  selectProjectRootDirectory: (userId: string, projectId?: string) =>
+    ipcRenderer.invoke("desktop:select-project-root-directory", userId, projectId) as Promise<string | null>,
+  getProjectRootDirectory: (userId: string, projectId?: string) =>
+    ipcRenderer.invoke("desktop:get-project-root-directory", userId, projectId) as Promise<string | null>,
+  promotePendingProjectRoot: (userId: string, projectId: string) =>
+    ipcRenderer.invoke("desktop:promote-pending-project-root", userId, projectId) as Promise<string | null>,
 
-  runKnowledgeGraphAnalysis: (projectId: string) =>
-    ipcRenderer.invoke("desktop:run-knowledge-graph-analysis", projectId) as Promise<{ ok: boolean; message?: string; error?: string }>,
+  pullProjectRootLatest: (userId: string, projectId: string) =>
+    ipcRenderer.invoke("desktop:pull-project-root-latest", userId, projectId) as Promise<{
+      ok: boolean;
+      message?: string;
+      error?: string;
+    }>,
+
+  runKnowledgeGraphAnalysis: (userId: string, projectId: string) =>
+    ipcRenderer.invoke("desktop:run-knowledge-graph-analysis", userId, projectId) as Promise<{ ok: boolean; message?: string; error?: string }>,
 
   onStatus: (callback: (status: ServiceStatus) => void) => {
     const listener = (_event: unknown, status: ServiceStatus) => callback(status);

@@ -12,6 +12,7 @@ export enum Collections {
 	Otps = "_otps",
 	Superusers = "_superusers",
 	Members = "members",
+	ProjectShares = "project_shares",
 	Projects = "projects",
 	Users = "users",
 }
@@ -103,6 +104,24 @@ export type MembersRecord = {
 	user?: RecordIdString
 }
 
+export type ProjectSharesRecord = {
+	created: IsoAutoDateString
+	deleted_project_id?: string
+	deleted_project_name?: string
+	from_user?: RecordIdString
+	id: string
+	manifest?: unknown
+	message?: string
+	package_file?: FileNameString
+	project?: RecordIdString
+	receiver_read?: boolean
+	sender_read?: boolean
+	role?: string
+	status?: string
+	to_user?: RecordIdString
+	updated: IsoAutoDateString
+}
+
 export type ProjectsRecord = {
 	created: IsoAutoDateString
 	description?: string
@@ -133,6 +152,7 @@ export type MfasResponse<Texpand = unknown> = Required<MfasRecord> & BaseSystemF
 export type OtpsResponse<Texpand = unknown> = Required<OtpsRecord> & BaseSystemFields<Texpand>
 export type SuperusersResponse<Texpand = unknown> = Required<SuperusersRecord> & AuthSystemFields<Texpand>
 export type MembersResponse<Texpand = unknown> = Required<MembersRecord> & BaseSystemFields<Texpand>
+export type ProjectSharesResponse<Texpand = unknown> = Required<ProjectSharesRecord> & BaseSystemFields<Texpand>
 export type ProjectsResponse<Texpand = unknown> = Required<ProjectsRecord> & BaseSystemFields<Texpand>
 export type UsersResponse<Texpand = unknown> = Required<UsersRecord> & AuthSystemFields<Texpand>
 
@@ -145,6 +165,7 @@ export type CollectionRecords = {
 	_otps: OtpsRecord
 	_superusers: SuperusersRecord
 	members: MembersRecord
+	project_shares: ProjectSharesRecord
 	projects: ProjectsRecord
 	users: UsersRecord
 }
@@ -156,6 +177,7 @@ export type CollectionResponses = {
 	_otps: OtpsResponse
 	_superusers: SuperusersResponse
 	members: MembersResponse
+	project_shares: ProjectSharesResponse
 	projects: ProjectsResponse
 	users: UsersResponse
 }

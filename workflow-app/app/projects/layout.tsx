@@ -1,55 +1,119 @@
 "use client";
 
-import { Fragment, ReactNode } from 'react';
-import Link from 'next/link';
-import { useParams, usePathname } from 'next/navigation';
+import { Fragment, ReactNode } from "react";
+import Link from "next/link";
+import { useParams, usePathname } from "next/navigation";
+import { Plus } from "lucide-react";
 import { UserButton } from "@/features/auth/components/user-button";
 import { CreateProjectDialog } from "@/features/projects/components/create-project-dialog";
-import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { IncomingSharesSidebar } from "@/features/project-sharing/components/incoming-shares-sidebar";
+import { SenderShareUpdatesSidebar } from "@/features/project-sharing/components/sender-share-updates-sidebar";
+import { RecipientDeletionSidebar } from "@/features/project-sharing/components/recipient-deletion-sidebar";
+import {
+    Sidebar,
+    SidebarContent,
+    SidebarGroup,
+    SidebarGroupContent,
+    SidebarGroupLabel,
+    SidebarHeader,
+    SidebarMenu,
+    SidebarMenuButton,
+    SidebarMenuItem,
+    SidebarProvider,
+    SidebarTrigger,
+} from "@/components/ui/sidebar";
 import { useState } from "react";
-import { useGetCurrentMemberByProject } from '@/features/members/api/use-get-current-member-by-project';
-import { useGetProject } from '@/features/projects/api/use-get-project-by-id';
-import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb';
+import { useGetProject } from "@/features/projects/api/use-get-project-by-id";
+import {
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbList,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 
-interface AuthLayoutProps {
+interface ProjectsLayoutProps {
     children: ReactNode;
-}; // since a layout should be reusable, it becomes an interface so no override happens
+}
 
-const AuthLayout = ({children}: AuthLayoutProps) => {
+const ProjectsLayout = ({ children }: ProjectsLayoutProps) => {
     const pathname = usePathname();
     const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
+    const showProjectsSidebar = pathname === "/projects";
 
-    // fetch the member for the current user and current project
     const params = useParams();
     const projectId = params.projectId as string | undefined;
-    const { data: member, isLoading: memberLoading } = useGetCurrentMemberByProject(projectId, { enabled: !!projectId }); // only runs when projectId is enabled, meaning only when i get redirected to the /projects/:projectId endpoint (logic included in ProjectsMain)
-    const { data: project } = useGetProject(projectId ?? "");
+    const { data: projectDetail } = useGetProject(projectId ?? "");
 
-    const pathSegments = pathname.split('/').filter(Boolean);
+    const pathSegments = pathname.split("/").filter(Boolean);
     const breadcrumbItems = pathSegments.map((segment, index) => {
-        const href = `/${pathSegments.slice(0, index + 1).join('/')}`;
+        const href = `/${pathSegments.slice(0, index + 1).join("/")}`;
         const isLast = index === pathSegments.length - 1;
 
         let label = segment;
-        if (segment === 'projects') {
-            label = 'Projects';
+        if (segment === "projects") {
+            label = "Projects page";
         } else if (segment === projectId) {
-            label = project?.name ?? `Project ${segment.slice(0, 8)}`;
+            if (projectDetail?.status === "deleted") {
+                label = projectDetail.deleted.projectName;
+            } else if (projectDetail?.status === "ok") {
+                label = (projectDetail.project.name as string) ?? `Project ${segment.slice(0, 8)}`;
+            } else {
+                label = `Project ${segment.slice(0, 8)}`;
+            }
         } else {
             label = segment
-                .split('-')
+                .split("-")
                 .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-                .join(' ');
+                .join(" ");
         }
 
         return { href, isLast, label };
     });
 
+    const mainContent = (
+        <main className="min-h-svh min-w-0 flex-1 overflow-x-hidden bg-background">
+            {showProjectsSidebar && (
+                <div className="fixed bottom-3 left-3 z-50">
+                    <SidebarTrigger />
+                </div>
+            )}
+
+            <div className="border-b px-6 py-3">
+                <Breadcrumb>
+                    <BreadcrumbList>
+                        {breadcrumbItems.map((item, index) => (
+                            <Fragment key={item.href}>
+                                {index > 0 && <BreadcrumbSeparator />}
+                                <BreadcrumbItem>
+                                    {item.isLast ? (
+                                        <BreadcrumbPage>{item.label}</BreadcrumbPage>
+                                    ) : (
+                                        <BreadcrumbLink asChild>
+                                            <Link href={item.href}>{item.label}</Link>
+                                        </BreadcrumbLink>
+                                    )}
+                                </BreadcrumbItem>
+                            </Fragment>
+                        ))}
+                    </BreadcrumbList>
+                </Breadcrumb>
+            </div>
+
+            {children}
+        </main>
+    );
+
+    if (!showProjectsSidebar) {
+        return mainContent;
+    }
+
     return (
         <SidebarProvider>
             <Sidebar>
                 <SidebarHeader>
-                    <UserButton/>
+                    <UserButton />
                 </SidebarHeader>
 
                 <SidebarContent>
@@ -58,55 +122,29 @@ const AuthLayout = ({children}: AuthLayoutProps) => {
                         <SidebarGroupContent>
                             <SidebarMenu>
                                 <SidebarMenuItem>
-                                    <SidebarMenuButton onClick={() => setIsProjectDialogOpen(true)}>
+                                    <SidebarMenuButton
+                                        variant="outline"
+                                        onClick={() => setIsProjectDialogOpen(true)}
+                                    >
+                                        <Plus />
                                         <span>Add project</span>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
                             </SidebarMenu>
                         </SidebarGroupContent>
                     </SidebarGroup>
+
+                    <IncomingSharesSidebar />
+                    <RecipientDeletionSidebar />
+                    <SenderShareUpdatesSidebar />
                 </SidebarContent>
             </Sidebar>
 
             <CreateProjectDialog open={isProjectDialogOpen} onOpenChange={setIsProjectDialogOpen} />
-            
-            <main className="flex-1">
-                <div className="fixed bottom-3 left-3 z-50">
-                    <SidebarTrigger />
-                </div>
 
-                <div className="border-b px-6 py-3">
-                    <Breadcrumb>
-                        <BreadcrumbList>
-                            <BreadcrumbItem>
-                                <BreadcrumbLink asChild>
-                                    <Link href="/">Home</Link>
-                                </BreadcrumbLink>
-                            </BreadcrumbItem>
-
-                            {breadcrumbItems.map((item) => (
-                                <Fragment key={item.href}>
-                                    <BreadcrumbSeparator />
-                                    <BreadcrumbItem>
-                                        {item.isLast ? (
-                                            <BreadcrumbPage>{item.label}</BreadcrumbPage>
-                                        ) : (
-                                            <BreadcrumbLink asChild>
-                                                <Link href={item.href}>{item.label}</Link>
-                                            </BreadcrumbLink>
-                                        )}
-                                    </BreadcrumbItem>
-                                </Fragment>
-                            ))}
-                        </BreadcrumbList>
-                    </Breadcrumb>
-                </div>
-
-                {children}
-            </main>
-
+            {mainContent}
         </SidebarProvider>
     );
 };
 
-export default AuthLayout;
+export default ProjectsLayout;

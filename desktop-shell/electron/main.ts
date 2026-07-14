@@ -1,6 +1,10 @@
 import path from "node:path";
 import fs from "node:fs";
 import { AppOrchestrator } from "./services/orchestrator";
+import {
+  getDesktopSettingsFilePath,
+  ensureProjectCommitsDirectory,
+} from "../shared/desktop-shell-paths.js";
 
 const electron = require("electron") as {
   app: {
@@ -22,11 +26,14 @@ const electron = require("electron") as {
   };
   dialog: {
     showErrorBox: (title: string, content: string) => void;
-    showOpenDialog: (options: {
-      properties: string[];
-      title?: string;
-      defaultPath?: string;
-    }) => Promise<{ canceled: boolean; filePaths: string[] }>;
+    showOpenDialog: (
+      browserWindow: unknown,
+      options: {
+        properties: string[];
+        title?: string;
+        defaultPath?: string;
+      }
+    ) => Promise<{ canceled: boolean; filePaths: string[] }>;
   };
 };
 
@@ -41,17 +48,19 @@ const orchestrator = new AppOrchestrator();
 let isQuitting = false;
 let isStopping = false;
 
-interface DesktopSettings { // per project roots: { projectId: rootPath }
-  commitStorageRoot?: string;
+interface UserDesktopSettings {
   projectRoots?: Record<string, string>;
+  pendingProjectRoot?: string;
 }
 
-function getSettingsFilePath(): string {
-  return path.join(app.getPath("userData"), "desktop-settings.json"); // returns where the app stores the saved file path setting
+interface DesktopSettings {
+  commitStorageRoot?: string;
+  projectRoots?: Record<string, string>;
+  users?: Record<string, UserDesktopSettings>;
 }
 
 function readSettings(): DesktopSettings {
-  const settingsFilePath = getSettingsFilePath();
+  const settingsFilePath = getDesktopSettingsFilePath();
   if (!fs.existsSync(settingsFilePath)) {
     return {};
   }
@@ -64,29 +73,38 @@ function readSettings(): DesktopSettings {
   }
 }
 
-function writeSettings(settings: DesktopSettings): void { // saves the file path setting object to disk as json
-  const settingsFilePath = getSettingsFilePath();
+function writeSettings(settings: DesktopSettings): void {
+  const settingsFilePath = getDesktopSettingsFilePath();
   fs.mkdirSync(path.dirname(settingsFilePath), { recursive: true });
   fs.writeFileSync(settingsFilePath, JSON.stringify(settings, null, 2), "utf-8");
 }
 
-// commits will be stored in appdata with projectId as the parent folder
-function getProjectCommitStorageAppDataPath(projectId: string): string {
-  const appDataPath = process.env.APPDATA || path.join(process.env.USERPROFILE || "", "AppData", "Roaming");
-  const projectPath = path.join(appDataPath, "log-a-priori-desktop-shell", projectId, "commits");
-  
-  fs.mkdirSync(projectPath, { recursive: true });
-  return projectPath;
+function getUserSettings(settings: DesktopSettings, userId: string): UserDesktopSettings {
+  if (!settings.users) {
+    settings.users = {};
+  }
+  if (!settings.users[userId]) {
+    settings.users[userId] = {};
+  }
+
+  if (settings.projectRoots && Object.keys(settings.projectRoots).length > 0) {
+    settings.users[userId].projectRoots = {
+      ...(settings.users[userId].projectRoots ?? {}),
+      ...settings.projectRoots,
+    };
+    delete settings.projectRoots;
+  }
+
+  return settings.users[userId];
 }
 
-export function getProjectCommitStorageRootDirectory(projectId: string): string {
-  return getProjectCommitStorageAppDataPath(projectId);
+export function getProjectCommitStorageRootDirectory(userId: string, projectId: string): string {
+  return ensureProjectCommitsDirectory(userId, projectId);
 }
 
-// project root/ location of the current working project will also be stored in appdata with projectId as the parent folder
-export async function selectProjectRootDirectory(projectId?: string): Promise<string | null> {
-  const existing = getProjectRootDirectory(projectId);
-  const result = await dialog.showOpenDialog({
+export async function selectProjectRootDirectory(userId: string, projectId?: string): Promise<string | null> {
+  const existing = getProjectRootDirectory(userId, projectId);
+  const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
     properties: ["openDirectory", "createDirectory"],
     title: "Select project root directory",
     defaultPath: existing ?? undefined
@@ -94,12 +112,16 @@ export async function selectProjectRootDirectory(projectId?: string): Promise<st
   if (!result.canceled && result.filePaths.length > 0) {
     const selectedPath = result.filePaths[0];
     const settings = readSettings();
-    if (!settings.projectRoots) {
-      settings.projectRoots = {};
+    const userSettings = getUserSettings(settings, userId);
+
+    if (!userSettings.projectRoots) {
+      userSettings.projectRoots = {};
     }
-    
-    if (projectId) { // if projectId is provided, store per project the root project directory
-      settings.projectRoots[projectId] = selectedPath;
+
+    if (projectId) {
+      userSettings.projectRoots[projectId] = selectedPath;
+    } else {
+      userSettings.pendingProjectRoot = selectedPath;
     }
 
     writeSettings(settings);
@@ -108,15 +130,42 @@ export async function selectProjectRootDirectory(projectId?: string): Promise<st
   return null;
 }
 
-export function getProjectRootDirectory(projectId?: string): string | null {
+export function getProjectRootDirectory(userId: string, projectId?: string): string | null {
   const settings = readSettings();
-  if (!settings.projectRoots) {
+  const userSettings = settings.users?.[userId];
+
+  if (!userSettings?.projectRoots) {
+    if (projectId && settings.projectRoots?.[projectId]) {
+      return settings.projectRoots[projectId];
+    }
     return null;
   }
-  if (projectId && settings.projectRoots[projectId]) {
-    return settings.projectRoots[projectId];
+
+  if (projectId && userSettings.projectRoots[projectId]) {
+    return userSettings.projectRoots[projectId];
+  }
+  if (!projectId && userSettings.pendingProjectRoot) {
+    return userSettings.pendingProjectRoot;
   }
   return null;
+}
+
+/** Moves `pendingProjectRoot` (create flow) onto the new project id. */
+export function promotePendingProjectRoot(userId: string, projectId: string): string | null {
+  const settings = readSettings();
+  const userSettings = getUserSettings(settings, userId);
+  const pending = userSettings.pendingProjectRoot;
+  if (!pending) {
+    return null;
+  }
+
+  if (!userSettings.projectRoots) {
+    userSettings.projectRoots = {};
+  }
+  userSettings.projectRoots[projectId] = pending;
+  delete userSettings.pendingProjectRoot;
+  writeSettings(settings);
+  return pending;
 }
 
 function createWindow() {
@@ -143,65 +192,121 @@ function registerIpc(): void {
   ipcMain.handle("desktop:stop", async () => { await orchestrator.stopAll(); return { ok: true }; });
   ipcMain.handle("desktop:status", () => orchestrator.getStatuses());
 
-  ipcMain.handle("desktop:get-project-commit-storage-root-directory", async (event: Record<string, unknown>, projectId: string) => {
-    try {
-      return getProjectCommitStorageRootDirectory(projectId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return null;
-    }
-  });
-
-  ipcMain.handle("desktop:select-project-root-directory", async (_, projectId?: string) => selectProjectRootDirectory(projectId));
-  ipcMain.handle("desktop:get-project-root-directory", (_, projectId?: string) => getProjectRootDirectory(projectId));
-
-  ipcMain.handle("desktop:run-knowledge-graph-analysis", async (event: Record<string, unknown>, projectId: string) => {
-    try {
-      const projectRoot = getProjectRootDirectory(projectId);
-      if (!projectRoot) {
-        return { ok: false, error: "Project root not selected for this project. Please set project root first." };
+  ipcMain.handle(
+    "desktop:get-project-commit-storage-root-directory",
+    async (_event: Record<string, unknown>, userId: string, projectId: string) => {
+      try {
+        if (!userId || !projectId) return null;
+        return getProjectCommitStorageRootDirectory(userId, projectId);
+      } catch {
+        return null;
       }
+    }
+  );
 
-      // used imports here to avoid circular dependency issues
-      const { getRuntimePaths } = await import("./services/paths.js");
-      const { spawnProcess, waitForExit } = await import("./services/utils.js");
-      const runtimePaths = getRuntimePaths();
+  ipcMain.handle(
+    "desktop:select-project-root-directory",
+    async (_event: Record<string, unknown>, userId: string, projectId?: string) => {
+      if (!userId) return null;
+      return selectProjectRootDirectory(userId, projectId);
+    }
+  );
+
+  ipcMain.handle(
+    "desktop:get-project-root-directory",
+    (_event: Record<string, unknown>, userId: string, projectId?: string) => {
+      if (!userId) return null;
+      return getProjectRootDirectory(userId, projectId);
+    }
+  );
+
+  ipcMain.handle(
+    "desktop:promote-pending-project-root",
+    (_event: Record<string, unknown>, userId: string, projectId: string) => {
+      if (!userId || !projectId) return null;
+      return promotePendingProjectRoot(userId, projectId);
+    }
+  );
+
+  ipcMain.handle(
+    "desktop:pull-project-root-latest",
+    async (_event: Record<string, unknown>, userId: string, projectId: string) => {
+      try {
+        if (!userId || !projectId) {
+          return { ok: false, error: "Missing user or project id" };
+        }
+
+        const projectRoot = getProjectRootDirectory(userId, projectId);
+        if (!projectRoot) {
+          return {
+            ok: false,
+            error: "No project root folder configured. Set it under Knowledge graph first.",
+          };
+        }
+
+        const { pullLatestInProjectRoot } = await import("./services/git-pull-project-root.js");
+        return pullLatestInProjectRoot(projectRoot);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, error: message };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    "desktop:run-knowledge-graph-analysis",
+    async (_event: Record<string, unknown>, userId: string, projectId: string) => {
+      try {
+        if (!userId) {
+          return { ok: false, error: "Missing user id for analysis" };
+        }
+
+        const projectRoot = getProjectRootDirectory(userId, projectId);
+        if (!projectRoot) {
+          return { ok: false, error: "Project root not selected for this project. Please set project root first." };
+        }
+
+        const { getRuntimePaths } = await import("./services/paths.js");
+        const { spawnProcess, waitForExit } = await import("./services/utils.js");
+        const runtimePaths = getRuntimePaths();
       
-      const child = spawnProcess("node", [
-        "--max-old-space-size=4096",
-        path.join(runtimePaths.repoRoot, "workflow-app", "scripts", "analyze-recursion.js"), // running the script from this repo root
-        projectRoot,
-        "--project-id",
-        projectId
-      ], { cwd: runtimePaths.repoRoot });
+        const child = spawnProcess("node", [
+          "--max-old-space-size=4096",
+          path.join(runtimePaths.repoRoot, "workflow-app", "scripts", "analyze-recursion.js"),
+          projectRoot,
+          "--project-id",
+          projectId,
+          "--user-id",
+          userId,
+        ], { cwd: runtimePaths.repoRoot });
 
-      child.child.stdout?.on("data", (data: Buffer) => {
-        const line = data.toString().trim();
-        if (line) {
-          console.log(`[KG Analysis] ${line}`);
-          mainWindow?.webContents.send("desktop:kg-analysis-progress", { message: line });
+        child.child.stdout?.on("data", (data: Buffer) => {
+          const line = data.toString().trim();
+          if (line) {
+            console.log(`[KG Analysis] ${line}`);
+            mainWindow?.webContents.send("desktop:kg-analysis-progress", { message: line });
+          }
+        });
+
+        child.child.stderr?.on("data", (data: Buffer) => {
+          const line = data.toString().trim();
+          if (line) {
+            console.error(`[KG Analysis] ${line}`);
+            mainWindow?.webContents.send("desktop:kg-analysis-progress", { message: line, error: true });
+          }
+        });
+
+        const code = await waitForExit(child.child);
+        if (code === 0) {
+          return { ok: true, message: "Analysis completed successfully" };
         }
-      });
-
-      child.child.stderr?.on("data", (data: Buffer) => {
-        const line = data.toString().trim();
-        if (line) {
-          console.error(`[KG Analysis] ${line}`);
-          mainWindow?.webContents.send("desktop:kg-analysis-progress", { message: line, error: true });
-        }
-      });
-
-      const code = await waitForExit(child.child);
-      if (code === 0) {
-        return { ok: true, message: "Analysis completed successfully" };
-      } else {
         return { ok: false, error: `Analysis failed with exit code ${code}` };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, error: message };
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: message };
     }
-  });
+  );
 
   orchestrator.onStatus((status) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -220,13 +325,15 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await dialog.showErrorBox("Startup failed", message);
-    await mainWindow.loadURL("data:text/html,<h2>Startup failed</h2><p>Check Electron logs for details</p>");
+    console.error("Full error:", error);
+    await mainWindow.loadURL(`data:text/html,<h2>Startup failed</h2><pre>${message}</pre><pre>${JSON.stringify(error, null, 2)}</pre>`);
   }
 }
 
 app.whenReady().then(() => {
   bootstrap().catch(async (error) => {
     const message = error instanceof Error ? error.message : String(error);
+    console.error("Fatal startup error:", error);
     await dialog.showErrorBox("Fatal startup error", message);
     app.quit();
   });

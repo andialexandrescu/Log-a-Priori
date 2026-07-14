@@ -21,8 +21,15 @@ function Tooltip({ ...props }: TooltipPrimitive.Root.Props) {
   return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
 }
 
-function TooltipTrigger({ ...props }: TooltipPrimitive.Trigger.Props) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
+function TooltipTrigger({ asChild = false, children, ...props }: TooltipPrimitive.Trigger.Props & { asChild?: boolean }) {
+  // Do not forward `asChild` to the DOM to avoid React warnings if the primitive
+  // implementation doesn't consume it. We accept `asChild` for compatibility
+  // but deliberately omit it when forwarding props.
+  return (
+    <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props}>
+      {children}
+    </TooltipPrimitive.Trigger>
+  );
 }
 
 function TooltipContent({

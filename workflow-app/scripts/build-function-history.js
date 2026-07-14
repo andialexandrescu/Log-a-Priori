@@ -2,12 +2,19 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
 
-function getProjectAppdataPath(projectId) {
+function getDesktopShellBaseDirectory() {
     const appData = process.env.APPDATA?.trim();
-    const baseDir = appData 
-        ? path.join(appData, "log-a-priori-desktop-shell", projectId)
-        : path.join(os.homedir(), "AppData", "Roaming", "log-a-priori-desktop-shell", projectId);
-    return baseDir;
+    return appData
+        ? path.join(appData, "log-a-priori-desktop-shell")
+        : path.join(os.homedir(), "AppData", "Roaming", "log-a-priori-desktop-shell");
+}
+
+function getProjectAppdataPath(projectId) {
+    const userId = process.env.PROJECT_OWNER_USER_ID?.trim();
+    if (userId) {
+        return path.join(getDesktopShellBaseDirectory(), userId, projectId);
+    }
+    return path.join(getDesktopShellBaseDirectory(), projectId);
 }
 
 async function exists(targetPath) {

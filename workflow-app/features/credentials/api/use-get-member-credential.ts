@@ -1,28 +1,25 @@
 import { useQuery } from "@tanstack/react-query";
 import { client } from "@/lib/rpc";
-import { toast } from "sonner";
+import { normalizeCredentialRecord, type UserCredentialResult } from "../schemas";
 
-export const useGetMemberCredential = (projectId: string, memberId: string) => {
+export const useGetUserCredential = (projectId: string, userId: string) => {
     const query = useQuery({
-        queryKey: ["projects", projectId, "members", memberId, "credentials"],
-        enabled: !!memberId,
-        queryFn: async () => {
-            try {
-                const res = await client.api.projects[":projectId"]["members"][":memberId"]["credentials"]["$get"]({
-                    param: { projectId, memberId },
-                });
+        queryKey: ["projects", projectId, "users", userId, "credentials"],
+        enabled: !!projectId && !!userId,
+        queryFn: async (): Promise<UserCredentialResult> => {
+            const res = await client.api.projects[":projectId"].users[":userId"]["credentials"]["$get"]({
+                param: { projectId, userId },
+            });
 
-                if (!res.ok) {
-                    throw new Error(`Failed to get credential: ${res.status}`);
-                }
-
-                const { data } = await res.json();
-                return data;
-            } catch (error) {
-                console.error("Failed to fetch credential:", error);
-                toast.error("Failed to fetch credential");
-                throw error;
+            if (!res.ok) {
+                throw new Error(`Failed to get credential: ${res.status}`);
             }
+
+            const body = (await res.json()) as { data?: unknown; inherited?: boolean };
+            return {
+                credential: normalizeCredentialRecord(body.data),
+                inherited: Boolean(body.inherited),
+            };
         },
     });
 

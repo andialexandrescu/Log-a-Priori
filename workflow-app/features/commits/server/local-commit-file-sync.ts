@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 import { githubHeaders, type EnrichedCommitPayload } from "./github-commits-utils";
+import { getDesktopSettingsFilePath, getProjectCommitsDirectory } from "@desktop-shell/shared/desktop-shell-paths";
 
 type FileOperation = "added" | "modified" | "removed";
 
@@ -9,6 +9,7 @@ type SyncCommitFilesInput = {
     repository: string;
     token: string;
     commit: EnrichedCommitPayload;
+    userId?: string;
     projectId?: string;
 };
 
@@ -16,40 +17,31 @@ type DesktopSettings = {
     githubFilesRoot?: string;
 };
 
-const SETTINGS_FILE_NAME = "desktop-settings.json";
-
-function getSettingsCandidates(): string[] {
-    const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-
-    return [
-        path.join(appData, "log-a-priori-desktop-shell", SETTINGS_FILE_NAME),
-        path.join(appData, "Log-a-Priori", SETTINGS_FILE_NAME),
-    ];
-}
-
-async function getSelectedRootDirectory(projectId?: string): Promise<string | null> {
-    if (projectId) { // use the project  specific root path
-        const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-        return path.join(appData, "log-a-priori-desktop-shell", projectId, "commits");
+async function getSelectedRootDirectory(userId?: string, projectId?: string): Promise<string | null> {
+    if (userId && projectId) {
+        return getProjectCommitsDirectory(userId, projectId);
     }
 
-    for (const candidate of getSettingsCandidates()) { // checking global desktop settings otherwise
-        try {
-            const raw = await fs.readFile(candidate, "utf8");
-            const parsed = JSON.parse(raw) as DesktopSettings;
+    try {
+        const raw = await fs.readFile(getDesktopSettingsFilePath(), "utf8");
+        const parsed = JSON.parse(raw) as DesktopSettings;
 
-            if (typeof parsed.githubFilesRoot === "string" && parsed.githubFilesRoot.trim()) {
-                return parsed.githubFilesRoot;
-            }
-        } catch {
+        if (typeof parsed.githubFilesRoot === "string" && parsed.githubFilesRoot.trim()) {
+            return parsed.githubFilesRoot;
         }
+    } catch {
     }
 
     return null;
 }
 
-async function getCommitDirectoryIfConfigured(repository: string, sha: string): Promise<string | null> {
-    const rootDirectory = await getSelectedRootDirectory();
+async function getCommitDirectoryIfConfigured(
+    repository: string,
+    sha: string,
+    userId?: string,
+    projectId?: string
+): Promise<string | null> {
+    const rootDirectory = await getSelectedRootDirectory(userId, projectId);
 
     if (!rootDirectory || !sha) {
         return null;
@@ -135,8 +127,8 @@ async function writeManifest(params: { commitDirectory: string; repository: stri
     await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 }
 
-export async function syncCommitFilesToSelectedRoot({ repository, token, commit, projectId }: SyncCommitFilesInput): Promise<void> {
-    const rootDirectory = await getSelectedRootDirectory(projectId);
+export async function syncCommitFilesToSelectedRoot({ repository, token, commit, userId, projectId }: SyncCommitFilesInput): Promise<void> {
+    const rootDirectory = await getSelectedRootDirectory(userId, projectId);
     const sha = typeof commit.sha === "string" ? commit.sha : "";
 
     if (!rootDirectory || !sha) {
@@ -180,15 +172,20 @@ export async function syncCommitFilesToSelectedRoot({ repository, token, commit,
     }
 }
 
-export async function hasCommitFilesExport(repository: string, sha: string): Promise<boolean> {
-    const commitDirectory = await getCommitDirectoryIfConfigured(repository, sha);
+export async function hasCommitFilesExport(
+    repository: string,
+    sha: string,
+    userId?: string,
+    projectId?: string
+): Promise<boolean> {
+    const commitDirectory = await getCommitDirectoryIfConfigured(repository, sha, userId, projectId);
 
     if (!commitDirectory) {
         return false;
     }
 
     try {
-        await fs.access(commitDirectory);
+        await fs.access(path.join(commitDirectory, "manifest.json"));
         return true;
     } catch {
         return false;

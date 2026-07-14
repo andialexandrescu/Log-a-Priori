@@ -9,6 +9,7 @@ function parseRoot(argv) {
     const args = {
         root: "",
         projectId: null,
+        userId: null,
     };
 
     if (argv[2]) {
@@ -22,6 +23,11 @@ function parseRoot(argv) {
     const projectIdIndex = argv.indexOf("--project-id"); // in order to be able save specific ts-code-analysis.json to project based subfolder inside appdata
     if (projectIdIndex !== -1 && argv[projectIdIndex + 1]) {
         args.projectId = argv[projectIdIndex + 1];
+    }
+
+    const userIdIndex = argv.indexOf("--user-id");
+    if (userIdIndex !== -1 && argv[userIdIndex + 1]) {
+        args.userId = argv[userIdIndex + 1];
     }
 
     return args;
@@ -68,26 +74,32 @@ function buildDefaultOutputPath(rootPath, repoPath = "") {
     return path.join(normalizedRoot, "analysis", "ts-code-graph.json");
 }
 
-function getDesktopShellAppdataPath(projectId) {
+function getDesktopShellBaseDirectory() {
     const appData = process.env.APPDATA?.trim();
-    const baseDir = appData
-        ? path.join(appData, "log-a-priori-desktop-shell", projectId)
-        : path.join(os.homedir(), "AppData", "Roaming", "log-a-priori-desktop-shell", projectId);
-    return baseDir;
+    return appData
+        ? path.join(appData, "log-a-priori-desktop-shell")
+        : path.join(os.homedir(), "AppData", "Roaming", "log-a-priori-desktop-shell");
 }
 
-function buildAppdataOutputPath(projectId) {
-    const baseDir = getDesktopShellAppdataPath(projectId);
+function getDesktopShellAppdataPath(projectId, userId) {
+    if (userId) {
+        return path.join(getDesktopShellBaseDirectory(), userId, projectId);
+    }
+    return path.join(getDesktopShellBaseDirectory(), projectId);
+}
+
+function buildAppdataOutputPath(projectId, userId) {
+    const baseDir = getDesktopShellAppdataPath(projectId, userId);
     return path.join(baseDir, "analysis", "ts-code-graph.json");
 }
 
-function buildPerCommitFunctionIndexPath(projectId, sha) {
-    const baseDir = getDesktopShellAppdataPath(projectId);
+function buildPerCommitFunctionIndexPath(projectId, userId, sha) {
+    const baseDir = getDesktopShellAppdataPath(projectId, userId);
     return path.join(baseDir, "analysis", `${sha}.json`);
 }
 
-async function deleteAnalysisFolder(projectId) {
-    const baseDir = getDesktopShellAppdataPath(projectId);
+async function deleteAnalysisFolder(projectId, userId) {
+    const baseDir = getDesktopShellAppdataPath(projectId, userId);
     const analysisPath = path.join(baseDir, "analysis");
     try {
         await fs.rm(analysisPath, { recursive: true, force: true });
@@ -160,10 +172,14 @@ async function findCommitDirectoryBySha(basePath, sha) { // helper to find a com
 
 async function run() {
     const args = parseRoot(process.argv);
+
+    if (args.userId) {
+        process.env.PROJECT_OWNER_USER_ID = args.userId;
+    }
     
     if (args.projectId) {
-        console.log(`AST Analysis started for project id: ${args.projectId}`);
-        await deleteAnalysisFolder(args.projectId);
+        console.log(`AST Analysis started for project id: ${args.projectId} (user: ${args.userId || "legacy"})`);
+        await deleteAnalysisFolder(args.projectId, args.userId);
     }
     
     const result = await analyzeFullProjectDirectory(args.root); // analyze the full project directory
@@ -205,7 +221,9 @@ async function run() {
         visualization,
     };
 
-    const outputPath = args.projectId ? path.resolve(buildAppdataOutputPath(args.projectId)) : path.resolve(buildDefaultOutputPath(args.root)) // appdata if projectId provided, otherwise default 
+    const outputPath = args.projectId
+        ? path.resolve(buildAppdataOutputPath(args.projectId, args.userId))
+        : path.resolve(buildDefaultOutputPath(args.root)) // appdata if projectId provided, otherwise default 
         
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.writeFile(outputPath, JSON.stringify(output, null, 2), "utf8");
@@ -221,7 +239,7 @@ async function run() {
 
     if (args.projectId) { // building per commit function indices from appdata
         console.log(`\nBuilding per commit function indices for projectId: ${args.projectId}`);
-        const appdataBase = getDesktopShellAppdataPath(args.projectId);
+        const appdataBase = getDesktopShellAppdataPath(args.projectId, args.userId);
         const commitsBasePath = path.join(appdataBase, "commits");
         
         try {
@@ -353,7 +371,7 @@ async function run() {
                         continue;
                     }
                     if (allChangedFunctions.length > 0) {
-                        const indexPath = buildPerCommitFunctionIndexPath(args.projectId, result.sha);
+                        const indexPath = buildPerCommitFunctionIndexPath(args.projectId, args.userId, result.sha);
                         const indexData = {
                             sha: result.sha,
                             generatedAt: new Date().toISOString(),
@@ -447,6 +465,5 @@ async function run() {
     // the full project analysis has already been done earlier in the script, that's what it is used for the main graph visualization and output
     console.log("Analysis completed");
 }
-
 
 run().catch(console.error);

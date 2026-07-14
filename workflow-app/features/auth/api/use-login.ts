@@ -19,7 +19,7 @@ export const useLogin = () => {
             return await response.json();
         },
         onSuccess: () => {
-            window.location.href = "/";
+            window.location.href = "/projects";
             queryClient.invalidateQueries({ queryKey: ["current"]});
         },
         onError: () => {

@@ -1,9 +1,10 @@
-import { GitCommit, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 import { CommitCard } from "./commit-card";
+import { commitShaFromPayload } from "@/features/webhook-events/lib/commit-sha";
 
 export function CommitEventDetails({ payload, repository }: { payload: any; repository: string }) {
     const commitData = payload.commit;
-    const sha = payload.sha;
+    const sha = commitShaFromPayload(payload);
     const message = commitData?.message || payload?.message || "No message";
     const dateValue = commitData?.author?.date || payload?.author_date || payload?.timestamp;
     const branch = payload?.branch || "Unknown";
@@ -19,9 +20,12 @@ export function CommitEventDetails({ payload, repository }: { payload: any; repo
     const isWebFlowPush = String(pusher).toLowerCase() === "web-flow";
 
     const parentSha = payload.parents?.[0]?.sha;
-    const compareUrl = parentSha
-        ? `https://github.com/${repository}/compare/${parentSha}...${sha}`
-        : (payload.compare || payload.html_url || "#");
+    const compareUrl =
+        sha && parentSha
+            ? `https://github.com/${repository}/compare/${parentSha}...${sha}`
+            : sha
+              ? `https://github.com/${repository}/commit/${sha}`
+              : (payload.compare || payload.html_url || "#");
 
     const fileChanges = payload.files || [];
     const addedFromFiles = fileChanges.filter((file: any) => file.status === "added").length;
@@ -55,23 +59,7 @@ export function CommitEventDetails({ payload, repository }: { payload: any; repo
                 </div>
             </div>
 
-            <div className="p-4 bg-muted/30 rounded-lg">
-                <div className="text-sm font-semibold mb-3 flex items-center gap-2">
-                    <GitCommit className="w-4 h-4" />
-                    1 Commit
-                </div>
-
-                <div className="grid grid-cols-1 gap-3">
-                    <CommitCard
-                        shortId={String(sha)}
-                        message={message}
-                        timeLabel={timeLabel}
-                        addedCount={addedCount}
-                        modifiedCount={modifiedCount}
-                        removedCount={removedCount}
-                    />
-                </div>
-            </div>
+            <CommitCard message={message} timeLabel={timeLabel} addedCount={addedCount} modifiedCount={modifiedCount} removedCount={removedCount} />
         </div>
     );
 }

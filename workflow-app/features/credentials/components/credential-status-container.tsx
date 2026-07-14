@@ -4,8 +4,8 @@ import dynamic from "next/dynamic";
 import { useState } from "react";
 import { CredentialStatus } from "./credential-status";
 import { CreateCredentialDialog } from "./create-credential-dialog";
-import { useGetCurrentMemberByProject } from "@/features/members/api/use-get-current-member-by-project";
-import { useGetMemberCredential } from "../api/use-get-member-credential";
+import { useGetUserCredential } from "../api/use-get-member-credential";
+import { useCurrent } from "@/features/auth/api/use-current";
 
 interface CredentialStatusContainerProps {
     projectId: string;
@@ -14,22 +14,27 @@ interface CredentialStatusContainerProps {
 function CredentialStatusContainerComponent({ projectId }: CredentialStatusContainerProps) {
     const [isCredentialDialogOpen, setIsCredentialDialogOpen] = useState(false);
     const [credentialMode, setCredentialMode] = useState<"create" | "edit">("create");
-    const { data: member, isLoading: memberLoading } = useGetCurrentMemberByProject(projectId, { enabled: !!projectId });
-    const { data: existingCredential } = useGetMemberCredential(projectId, member?.id ?? "");
+    const { data: currentUser } = useCurrent();
+    const { data: existingCredentialData } = useGetUserCredential(projectId, currentUser?.id ?? "");
+    const existingCredential = existingCredentialData?.credential;
+    const inheritedCredential = existingCredentialData?.inherited ?? false;
 
     const handleCredentialEdit = () => {
+        if (inheritedCredential) {
+            return;
+        }
         setCredentialMode(existingCredential ? "edit" : "create");
         setIsCredentialDialogOpen(true);
     };
 
-    if (memberLoading || !member) {
+    if (!currentUser) {
         return null;
     }
 
     return (
         <>
-            <CredentialStatus projectId={projectId} memberId={member.id} onEditClick={handleCredentialEdit} />
-            <CreateCredentialDialog open={isCredentialDialogOpen} onOpenChange={setIsCredentialDialogOpen} projectId={projectId} memberId={member.id} mode={credentialMode}/>
+            <CredentialStatus projectId={projectId} userId={currentUser.id} onEditClick={handleCredentialEdit} />
+            <CreateCredentialDialog open={isCredentialDialogOpen} onOpenChange={setIsCredentialDialogOpen} projectId={projectId} userId={currentUser.id} mode={credentialMode}/>
         </>
     );
 }

@@ -55,7 +55,7 @@ export const UserButton = () => {
                 </div>
                 <Separator className="mb-1"/>
                 <DropdownMenuItem onClick={handleLogout}
-                    className="h-10 flex items-center justify-center text-amber-700 font-medium cursor-pointer">
+                    className="h-10 flex items-center justify-center text-purple-700 font-medium cursor-pointer">
                     <LogOut className="size-4 mr-2"/> Log out
                 </DropdownMenuItem>
             </DropdownMenuContent>

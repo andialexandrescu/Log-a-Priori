@@ -2,26 +2,27 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { InferRequestType, InferResponseType } from "hono";
 import { client } from "@/lib/rpc";
 import { toast } from "sonner";
-
-type RawResponseType = InferResponseType<(typeof client.api.projects)[":projectId"]["members"][":memberId"]["credentials"]["$post"]>;
-type SuccessResponseType = Extract<RawResponseType, { data: any }>;
-type RequestType = InferRequestType<(typeof client.api.projects)[":projectId"]["members"][":memberId"]["credentials"]["$post"]>;
+type SuccessResponseType = { data: any };
 
 export type CreateCredentialInput = {
-    projectId: RequestType["param"]["projectId"];
-    memberId: RequestType["param"]["memberId"];
-    api_keys: RequestType["json"]["api_keys"];
-    api_limitations?: RequestType["json"]["api_limitations"];
+    projectId: string;
+    userId: string;
+    api_keys: {
+        token: string;
+        owner: string;
+        repo: string;
+    };
+    api_limitations?: Record<string, any>;
 };
 
 export const useCreateCredential = () => {
     const queryClient = useQueryClient();
 
     const mutation = useMutation<SuccessResponseType, Error, CreateCredentialInput>({
-        mutationFn: async ({ projectId, memberId, ...json }) => {
+        mutationFn: async ({ projectId, userId, ...json }) => {
             try {
-                const response = await client.api.projects[":projectId"]["members"][":memberId"]["credentials"]["$post"]({
-                    param: { projectId, memberId },
+                const response = await client.api.projects[":projectId"]["users"][":userId"]["credentials"]["$post"]({
+                    param: { projectId, userId },
                     json
                 });
                 const result = await response.json();
@@ -45,9 +46,12 @@ export const useCreateCredential = () => {
         },
         onSuccess: async (_data, variables) => {
             await queryClient.invalidateQueries({
-                queryKey: ["projects", variables.projectId, "members", variables.memberId, "webhook-events"],
+                queryKey: ["projects", variables.projectId, "users", variables.userId, "credentials"],
             });
-            toast.success("Credential created successfully");
+            await queryClient.invalidateQueries({
+                queryKey: ["projects", variables.projectId, "users", variables.userId, "webhook-events"],
+            });
+            toast.success("GitHub connected successfully");
         },
         onError: (error) => {
             console.error("Failed to create credential:", error.message);

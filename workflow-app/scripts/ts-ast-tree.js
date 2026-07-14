@@ -260,12 +260,19 @@ function buildFullBaselineIndexPath(projectId) { // path to the cumulative full-
     return path.join(baseDir, "analysis", "full-baseline.json");
 }
 
-function getProjectAppdataPath(projectId) { // get appdata path for a project
+function getDesktopShellBaseDirectory() {
     const appData = process.env.APPDATA?.trim();
-    const baseDir = appData 
-        ? path.join(appData, "log-a-priori-desktop-shell", projectId)
-        : path.join(os.homedir(), "AppData", "Roaming", "log-a-priori-desktop-shell", projectId);
-    return baseDir;
+    return appData
+        ? path.join(appData, "log-a-priori-desktop-shell")
+        : path.join(os.homedir(), "AppData", "Roaming", "log-a-priori-desktop-shell");
+}
+
+function getProjectAppdataPath(projectId) { // get appdata path for a project
+    const userId = process.env.PROJECT_OWNER_USER_ID?.trim();
+    if (userId) {
+        return path.join(getDesktopShellBaseDirectory(), userId, projectId);
+    }
+    return path.join(getDesktopShellBaseDirectory(), projectId);
 }
 
 async function loadFullBaseline(projectId) { // loads the cumulative full-baseline.json
@@ -521,7 +528,7 @@ function resolveCallTarget(callExpression, context) { // resolves a call express
     return null;
 }
 
-function extractCallEdges(context, edges) { // extracts CALLS edges between functions – both cross-file and in-file
+function extractCallEdges(context, edges) { // extracts CALLS edges between functions, both cross-file and in-file
     const dedupe = new Set();
 
     for (const func of context.functions) {
@@ -537,6 +544,7 @@ function extractCallEdges(context, edges) { // extracts CALLS edges between func
             const endLoc = getEndLocation(callExpr);
             const edge = {
                 kind: "CALLS",
+                relation: "call",
                 from: func.id,
                 to: target.id,
                 label: callExpr.getExpression().getText(),
@@ -551,7 +559,7 @@ function extractCallEdges(context, edges) { // extracts CALLS edges between func
             };
 
             // deduplicate edges - same caller/ callee per file location
-            const key = `${edge.kind}|${edge.from}|${edge.to}|${edge.line}|${edge.column}`;
+            const key = `${edge.kind}|${edge.relation}|${edge.from}|${edge.to}|${edge.startLine}|${edge.startColumn}`;
             if (dedupe.has(key)) continue;
             dedupe.add(key);
             edges.push(edge);
@@ -590,6 +598,7 @@ function extractUsesEdges(context, edges) { // extracts function references (mid
 
                 const edge = {
                     kind: "USES",
+                    relation: "reference",
                     from: func.id,
                     to: targetFunc.id,
                     label: name,
@@ -604,7 +613,7 @@ function extractUsesEdges(context, edges) { // extracts function references (mid
                 };
 
                 // deduplicate - same usage per location
-                const key = `${edge.kind}|${edge.from}|${edge.to}|${edge.line}|${edge.column}`;
+                const key = `${edge.kind}|${edge.relation}|${edge.from}|${edge.to}|${edge.startLine}|${edge.startColumn}`;
                 if (dedupe.has(key)) continue;
                 dedupe.add(key);
                 edges.push(edge);
@@ -613,67 +622,161 @@ function extractUsesEdges(context, edges) { // extracts function references (mid
     }
 }
 
-function extractModuleImportEdges(context, project, edges) { // for CommonJS when module imports and uses a function from another module
+function collectLocalImportBindings(nameNode) {
+    const bindings = [];
+    if (!nameNode) {
+        return bindings;
+    }
+
+    if (Node.isIdentifier(nameNode)) {
+        const local = nameNode.getText();
+        bindings.push({ local, exportName: local });
+        return bindings;
+    }
+
+    if (Node.isObjectBindingPattern(nameNode)) {
+        for (const element of nameNode.getElements()) {
+            if (!Node.isBindingElement(element)) continue;
+            const localNode = element.getNameNode();
+            if (!localNode) continue;
+            const local = localNode.getText();
+            const propertyNameNode = element.getPropertyNameNode();
+            const exportName = propertyNameNode ? propertyNameNode.getText() : local;
+            bindings.push({ local, exportName });
+        }
+        return bindings;
+    }
+
+    if (Node.isArrayBindingPattern(nameNode)) {
+        for (const element of nameNode.getElements()) {
+            if (!Node.isBindingElement(element)) continue;
+            const localNode = element.getNameNode();
+            if (!localNode) continue;
+            const local = localNode.getText();
+            bindings.push({ local, exportName: local });
+        }
+    }
+
+    return bindings;
+}
+
+function resolveImportTargetFunctions(context, binding) {
+    const names = new Set([binding.local, binding.exportName].filter(Boolean));
+    const targets = [];
+    const seen = new Set();
+
+    for (const name of names) {
+        for (const targetFunc of context.functionsBySimpleName.get(name) || []) {
+            if (seen.has(targetFunc.id)) continue;
+            seen.add(targetFunc.id);
+            targets.push(targetFunc);
+        }
+    }
+
+    return targets;
+}
+
+function isImportBindingUsage(identifier, localName) {
+    const parent = identifier.getParent();
+    if (!parent) return true;
+
+    if (Node.isVariableDeclaration(parent) && parent.getName() === localName) {
+        return false;
+    }
+
+    if (Node.isImportSpecifier(parent) || Node.isImportClause(parent) || Node.isNamespaceImport(parent)) {
+        return false;
+    }
+
+    if (Node.isBindingElement(parent)) {
+        const bindingName = parent.getNameNode()?.getText();
+        if (bindingName === localName) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function appendModuleImportEdges(context, sourceFile, filePath, binding, edges, dedupe) {
+    const identifiers = sourceFile
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .filter((id) => id.getText() === binding.local);
+
+    for (const usage of identifiers) {
+        if (!isImportBindingUsage(usage, binding.local)) continue;
+
+        const targetFuncs = resolveImportTargetFunctions(context, binding);
+        for (const targetFunc of targetFuncs) {
+            const startLoc = getStartLocation(usage);
+            const endLoc = getEndLocation(usage);
+            const edge = {
+                kind: "USES",
+                relation: "module-import",
+                from: `module:${filePath}`,
+                to: targetFunc.id,
+                label: binding.local,
+                filePath: startLoc.filePath,
+                startLine: startLoc.line,
+                startColumn: startLoc.column,
+                endLine: endLoc.line,
+                endColumn: endLoc.column,
+                resolved: true,
+                scope: filePath === targetFunc.filePath ? "in-file" : "cross-file",
+                directed: true,
+            };
+
+            const key = `${edge.kind}|${edge.relation}|${edge.from}|${edge.to}|${edge.startLine}|${edge.startColumn}`;
+            if (dedupe.has(key)) continue;
+            dedupe.add(key);
+            edges.push(edge);
+        }
+    }
+}
+
+function extractModuleImportEdges(context, project, edges) { // CommonJS require() and ES import usage at file level
     const dedupe = new Set();
-    let foundEdges = 0;
 
     for (const sourceFile of project.getSourceFiles()) {
         const filePath = sourceFile.getFilePath();
-        
-        const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression); // require() calls
+
+        for (const importDecl of sourceFile.getImportDeclarations()) {
+            if (importDecl.isTypeOnly()) continue;
+
+            const bindings = [];
+            const defaultImport = importDecl.getDefaultImport();
+            if (defaultImport) {
+                const local = defaultImport.getText();
+                bindings.push({ local, exportName: local });
+            }
+
+            const namespaceImport = importDecl.getNamespaceImport();
+            if (namespaceImport) {
+                bindings.push({ local: namespaceImport.getText(), exportName: namespaceImport.getText() });
+            }
+
+            for (const namedImport of importDecl.getNamedImports()) {
+                const local = namedImport.getName();
+                const exportName = namedImport.getAliasNode()?.getText() ?? local;
+                bindings.push({ local, exportName });
+            }
+
+            for (const binding of bindings) {
+                appendModuleImportEdges(context, sourceFile, filePath, binding, edges, dedupe);
+            }
+        }
+
+        const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression);
         for (const call of calls) {
             const expr = call.getExpression();
-            if (!Node.isIdentifier(expr) || expr.getText() !== 'require') continue;
+            if (!Node.isIdentifier(expr) || expr.getText() !== "require") continue;
 
-            let parent = call.getParent(); // the identifier the require is assigned to
-            let requiredName = null;
+            const parent = call.getParent();
+            if (!parent || !Node.isVariableDeclaration(parent)) continue;
 
-            // const name = require('...')
-            if (parent && Node.isVariableDeclaration(parent)) {
-                requiredName = parent.getName();
-                parent = parent.getParent(); // get the parent of the declaration
-            }
-            // const { name } = require('...') (destructuring)
-            else if (parent && Node.isCallExpression(parent)) {
-                parent = parent.getParent();
-                if (parent && Node.isVariableDeclaration(parent)) {
-                    requiredName = parent.getName();
-                }
-            }
-
-            if (!requiredName) continue;
-
-            const identifiers = sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).filter(id => id.getText() === requiredName); // references of this imported name in the file
-            
-            for (const usage of identifiers) {
-                const idParent = usage.getParent();
-                if (Node.isVariableDeclaration(idParent) && idParent.getName() === requiredName) continue;
-
-                const targetFuncs = context.functionsBySimpleName.get(requiredName) || []; // name matching
-                for (const targetFunc of targetFuncs) {
-                    const startLoc = getStartLocation(usage);
-                    const endLoc = getEndLocation(usage);
-                    const edge = {
-                        kind: "USES",
-                        from: `module:${filePath}`,
-                        to: targetFunc.id,
-                        label: requiredName,
-                        filePath: startLoc.filePath,
-                        startLine: startLoc.line,
-                        startColumn: startLoc.column,
-                        endLine: endLoc.line,
-                        endColumn: endLoc.column,
-                        resolved: true,
-                        scope: filePath === targetFunc.filePath ? "in-file" : "cross-file",
-                        directed: true,
-                    };
-
-                    const key = `${edge.kind}|${edge.from}|${edge.to}|${edge.line}|${edge.column}`;
-                    if (dedupe.has(key)) continue;
-                    dedupe.add(key);
-                    edges.push(edge);
-                    foundEdges++;
-                }
+            const bindings = collectLocalImportBindings(parent.getNameNode());
+            for (const binding of bindings) {
+                appendModuleImportEdges(context, sourceFile, filePath, binding, edges, dedupe);
             }
         }
     }
@@ -716,6 +819,7 @@ function extractJsxComponentUsesEdges(context, edges) { // original impl: extrac
 
             const edge = {
                 kind: "CALLS",
+                relation: "jsx-component",
                 from: func.id,
                 to: target.id,
                 label: componentName,
@@ -730,7 +834,7 @@ function extractJsxComponentUsesEdges(context, edges) { // original impl: extrac
             };
 
             // deduplicate edges
-            const key = `${edge.kind}|${edge.from}|${edge.to}|${edge.line}|${edge.column}`;
+            const key = `${edge.kind}|${edge.relation}|${edge.from}|${edge.to}|${edge.startLine}|${edge.startColumn}`;
             if (dedupe.has(key)) continue;
             dedupe.add(key);
             edges.push(edge);

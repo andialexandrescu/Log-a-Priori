@@ -1,4 +1,6 @@
-export const githubHeaders = (token: string) => ({ 
+import { commitWebhookEventExists } from "@/features/webhook-events/lib/commit-sha";
+
+export const githubHeaders = (token: string) => ({
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github.v3+json",
 });
@@ -102,7 +104,7 @@ export type EnrichedCommitPayload = GithubCommitSummary & {
 
 type EnrichAndStoreInitialCommitsInput = {
     pb: any;
-    memberId: string;
+    userId: string;
     repository: string;
     token: string;
     projectId?: string;
@@ -126,6 +128,7 @@ type SyncCommitFilesInput = {
     repository: string;
     token: string;
     commit: EnrichedCommitPayload;
+    userId?: string;
     projectId?: string;
 };
 
@@ -186,20 +189,25 @@ export const enrichCommitWithDetails = async ({ owner, repoName, sha, summary, t
     };
 };
 
-export const syncCommitFilesToSelectedRoot = async ({ repository, token, commit, projectId }: SyncCommitFilesInput): Promise<void> => {
+export const syncCommitFilesToSelectedRoot = async ({ repository, token, commit, userId, projectId }: SyncCommitFilesInput): Promise<void> => {
     const module = await import("./local-commit-file-sync");
-    await module.syncCommitFilesToSelectedRoot({ repository, token, commit, projectId });
+    await module.syncCommitFilesToSelectedRoot({ repository, token, commit, userId, projectId });
 };
 
-export const hasCommitFilesExport = async (repository: string, sha: string): Promise<boolean> => {
+export const hasCommitFilesExport = async (
+    repository: string,
+    sha: string,
+    userId?: string,
+    projectId?: string
+): Promise<boolean> => {
     const module = await import("./local-commit-file-sync");
-    return module.hasCommitFilesExport(repository, sha);
+    return module.hasCommitFilesExport(repository, sha, userId, projectId);
 };
 
 // the backfill orchestrator calling enrichCommitWithDetails for each GithubCommitSummary
-export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, token, projectId }: EnrichAndStoreInitialCommitsInput): Promise<InitialBackfillResult> => {
+export const enrichAndStoreInitialCommits = async ({ pb, userId, repository, token, projectId }: EnrichAndStoreInitialCommitsInput): Promise<InitialBackfillResult> => {
     const [owner, repoName] = repository.split("/");
-    console.log(`Starting initial backfill for ${repository}, projectId=${projectId}, memberId=${memberId}`);
+    console.log(`Starting initial backfill for ${repository}, projectId=${projectId}, userId=${userId}`);
 
     const githubCommits: GithubCommitSummary[] = [];
 
@@ -256,27 +264,30 @@ export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, t
             defaultBranch,
         });
 
-        // on initial credential creation the webhook_events table is empty for that member+repository combination, so there's no possibility of existing records to update
         try {
-            // check if commit already exists to avoid duplicates
-            const existing = await pb.collection("webhook_events").getList(1, 1, {
-                filter: `member="${memberId}" && repository="${repository}" && event_type="commit" && payload.sha="${sha}"`,
-            });
+            const alreadyStored = await commitWebhookEventExists(
+                pb,
+                userId,
+                repository,
+                sha,
+                projectId
+            );
 
-            if (existing.totalItems === 0) {
+            if (!alreadyStored) {
                 const createPayload: any = {
-                    member: memberId,
+                    user: userId,
                     event_type: "commit",
                     repository,
                     payload: normalizedCommit,
                 };
-                
+
                 if (projectId) {
                     createPayload.project = projectId;
                 }
-                
+
                 const created = await pb.collection("webhook_events").create(createPayload);
                 console.log(`Created webhook event for commit ${sha.substring(0, 7)}, record id=${created.id}`);
+                createdCount += 1;
             } else {
                 console.log(`Commit ${sha.substring(0, 7)} already exists, skipping`);
             }
@@ -290,13 +301,12 @@ export const enrichAndStoreInitialCommits = async ({ pb, memberId, repository, t
                 repository,
                 token,
                 commit: normalizedCommit,
+                userId: userId,
                 projectId,
             });
         } catch (error) {
             console.error(`Failed to export initial backfill commit files for ${sha}:`, error);
         }
-
-        createdCount += 1;
     }
 
     console.log(`Initial backfill complete: created ${createdCount} webhook events`);

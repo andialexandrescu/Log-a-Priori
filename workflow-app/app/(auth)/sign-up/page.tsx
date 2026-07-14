@@ -6,7 +6,7 @@ const SignUpPage = async () => {
     const user = await getCurrent();
 
     if (user) {
-        redirect("/");
+        redirect("/projects");
     }
 
     return <SignUpCard/>

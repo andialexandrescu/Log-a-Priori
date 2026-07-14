@@ -4,34 +4,59 @@ import { randomBytes } from "crypto";
 import { sessionMiddleware } from "@/lib/session-middleware";
 import { createCredentialsSchema } from "../schemas";
 import { githubHeaders, mapGithubApiError, parseGithubErrorPayload } from "../../commits/server/github-commits-utils";
+import { resolveProjectIntegrationContext } from "@/features/project-sharing/lib/project-access";
+import {
+    getPocketBaseForIntegrationData,
+    resolveCredentialForProject,
+} from "@/features/project-sharing/lib/integration-pocketbase";
+import { clearProjectCommitIntegrationData } from "@/features/projects/lib/clear-project-commit-integration";
+import { enrichAndStoreInitialCommits } from "@/features/commits/server/github-commits-utils";
 
 const credentialsApp = new Hono()
-    .get("/", sessionMiddleware, async (c) => { // get the github webhook credential for a member
+    .get("/", sessionMiddleware, async (c) => { // get the github webhook credential for a user
         const pb = c.get("pb");
         const account = c.get("account");
-        const memberId = c.req.param("memberId");
+        const userId = c.req.param("userId");
+        const projectId = c.req.param("projectId");
 
         if (!account) {
             return c.json({ error: "Unauthorized" }, 401);
         }
 
-        if (!memberId) {
-            return c.json({ error: "Member is required" }, 400);
+        if (!userId) {
+            return c.json({ error: "User is required" }, 400);
+        }
+
+        if (!projectId) {
+            return c.json({ error: "Project is required" }, 400);
+        }
+
+        const integration = await resolveProjectIntegrationContext(pb, projectId, account.id);
+        if (!integration.ok) {
+            return c.json({ error: integration.error }, integration.status);
+        }
+
+        if (userId !== account.id && userId !== integration.integrationUserId) {
+            return c.json({ error: "You do not have access to this user's credentials" }, 403);
         }
 
         try {
-            const member = await pb.collection("members").getOne(memberId, { expand: "user,project" });
-            if (member.user !== account.id) {
-                return c.json({ error: "You do not have access to this member's credentials" }, 403);
-            }
+            const credentialPb = await getPocketBaseForIntegrationData(
+                pb,
+                integration,
+                account.id
+            );
 
-            const credentials = await pb.collection("credentials").getFullList({filter: `member = "${memberId}"`}); // getting all credentials for this member (only one)
+            const credential = await resolveCredentialForProject(
+                credentialPb,
+                integration.integrationUserId,
+                projectId
+            );
 
-            if (credentials.length === 0) {
-                return c.json({ data: null }, 200);
-            }
-
-            return c.json({ data: credentials[0] }, 200);
+            return c.json({
+                data: credential,
+                inherited: integration.isSharedRecipient,
+            }, 200);
         } catch (error: any) {
             console.error("Failed to fetch credential:", error);
             return c.json({ error: "Failed to fetch credential" }, 500);
@@ -40,7 +65,7 @@ const credentialsApp = new Hono()
     .post("/", sessionMiddleware, zValidator("json", createCredentialsSchema), async (c) => {
         const pb = c.get("pb");
         const account = c.get("account");
-        const memberId = c.req.param("memberId");
+        const userId = c.req.param("userId");
         const data = c.req.valid("json");
 
         if (!account) {
@@ -48,19 +73,27 @@ const credentialsApp = new Hono()
             return c.json({ error: "Unauthorized" }, 401);
         }
 
-        if (!memberId) {
-            console.log(`No memberId provided`);
-            return c.json({ error: "Member is required" }, 400);
+        if (!userId) {
+            console.log(`No userId provided`);
+            return c.json({ error: "User is required" }, 400);
+        }
+
+        if (userId !== account.id) {
+            console.log(`User not owned by account`);
+            return c.json({ error: "You do not have access to this user's credentials" }, 403);
+        }
+
+        const projectId = c.req.param("projectId");
+        if (projectId) {
+            const integration = await resolveProjectIntegrationContext(pb, projectId, account.id);
+            if (integration.ok && integration.isSharedRecipient) {
+                return c.json({
+                    error: "Shared projects use the project owner's GitHub credentials",
+                }, 403);
+            }
         }
 
         try {
-            console.log(`Fetching member ${memberId}`);
-            const member = await pb.collection("members").getOne(memberId, { expand: "user,project" }); // the auth user is the member
-            if (member.user !== account.id) {
-                console.log(`Member not owned by account`);
-                return c.json({ error: "You do not have access to this member's credentials" }, 403);
-            }
-
             console.log(`Creating credential record in db`);
             const webhookSecret = randomBytes(32).toString('hex');
             console.log(`api_keys data:`, {
@@ -69,7 +102,8 @@ const credentialsApp = new Hono()
                 repo: data.api_keys.repo,
             });
             const credentials = await pb.collection("credentials").create({
-                member: memberId,
+                user: userId,
+                project: c.req.param("projectId"),
                 api_keys: {
                     ...data.api_keys,
                     webhookSecret, // add the generated secret
@@ -190,10 +224,11 @@ const credentialsApp = new Hono()
             return c.json({ error: errorMessage }, statusCode);
         }
     })
-    .patch("/:credentialId", sessionMiddleware, zValidator("json", createCredentialsSchema), async (c) => { // update an existing github webhook credential
+    .patch("/:credentialId", sessionMiddleware, zValidator("json", createCredentialsSchema), async (c) => {
         const pb = c.get("pb");
         const account = c.get("account");
-        const memberId = c.req.param("memberId");
+        const userId = c.req.param("userId");
+        const projectId = c.req.param("projectId");
         const credentialId = c.req.param("credentialId");
         const data = c.req.valid("json");
 
@@ -201,33 +236,96 @@ const credentialsApp = new Hono()
             return c.json({ error: "Unauthorized" }, 401);
         }
 
-        if (!memberId || !credentialId) {
-            return c.json({ error: "Member and credential are required" }, 400);
+        if (!userId || !credentialId || !projectId) {
+            return c.json({ error: "User, project, and credential are required" }, 400);
+        }
+
+        if (userId !== account.id) {
+            return c.json({ error: "You do not have access to this user's credentials" }, 403);
+        }
+
+        const integration = await resolveProjectIntegrationContext(pb, projectId, account.id);
+        if (!integration.ok) {
+            return c.json({ error: integration.error }, integration.status);
+        }
+
+        if (!integration.isOwner) {
+            return c.json({ error: "Only the project owner can update GitHub credentials" }, 403);
         }
 
         try {
-            const member = await pb.collection("members").getOne(memberId, { expand: "user,project" });
-            if (member.user !== account.id) {
-                return c.json({ error: "You do not have access to this member's credentials" }, 403);
+            const credential = await pb.collection("credentials").getOne(credentialId);
+            if (credential.user !== integration.integrationUserId) {
+                return c.json({ error: "This credential does not belong to this user" }, 403);
             }
 
-            const credential = await pb.collection("credentials").getOne(credentialId);
-            if (credential.member !== memberId) {
-                return c.json({ error: "This credential does not belong to this member" }, 403);
+            if (credential.project && credential.project !== projectId) {
+                return c.json({ error: "Credential does not belong to this project" }, 403);
             }
+
+            const { token, owner, repo } = data.api_keys;
+            const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+                headers: githubHeaders(token),
+            });
+            if (!repoRes.ok) {
+                const payload = await parseGithubErrorPayload(repoRes);
+                const mapped = mapGithubApiError(repoRes.status, payload);
+                return c.json(
+                    {
+                        error: mapped.message,
+                        github: {
+                            status: repoRes.status,
+                            message: payload.message,
+                            documentation_url: payload.documentation_url,
+                        },
+                    },
+                    mapped.status as 401 | 404 | 500
+                );
+            }
+
+            const reset = await clearProjectCommitIntegrationData(
+                projectId,
+                integration.ownerUserId
+            );
 
             const updated = await pb.collection("credentials").update(credentialId, {
+                project: projectId,
                 api_keys: {
                     ...credential.api_keys,
-                    token: data.api_keys.token,
-                    owner: data.api_keys.owner,
-                    repo: data.api_keys.repo,
-                    webhookSecret: credential.api_keys.webhookSecret, // keep existing secret
+                    token,
+                    owner,
+                    repo,
+                    webhookSecret: credential.api_keys.webhookSecret,
                 },
                 api_limitations: data.api_limitations,
             });
 
-            return c.json({ data: updated }, 200);
+            const repository = `${owner}/${repo}`;
+            let backfill = { fetchedFromGithub: 0, created: 0 };
+            try {
+                backfill = await enrichAndStoreInitialCommits({
+                    pb,
+                    userId: integration.integrationUserId,
+                    repository,
+                    token,
+                    projectId,
+                });
+            } catch (backfillError) {
+                console.error("Credential updated but commit backfill failed:", backfillError);
+                return c.json(
+                    {
+                        error:
+                            backfillError instanceof Error
+                                ? backfillError.message
+                                : "Credential saved but failed to import commits from GitHub",
+                        data: updated,
+                        reset,
+                    },
+                    500
+                );
+            }
+
+            return c.json({ data: updated, reset, backfill }, 200);
         } catch (error: any) {
             console.error("Failed to update credential:", error);
             return c.json({ error: "Failed to update credential" }, 500);

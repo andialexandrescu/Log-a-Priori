@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { client } from "@/lib/rpc";
 import { toast } from "sonner";
+import { normalizeProjectListItems, type ProjectListItem } from "../schemas";
 
 export const useGetProjects = () => {
 	const query = useQuery({
 		queryKey: ["projects"],
-		queryFn: async () => {
+		queryFn: async (): Promise<ProjectListItem[]> => {
             try {
                 const res = await client.api.projects.$get();
 
@@ -13,9 +14,8 @@ export const useGetProjects = () => {
                     throw new Error("Failed to get projects");
                 }
 
-                const { data } = await res.json();
-
-                return data;
+                const body = (await res.json()) as { data?: unknown };
+                return normalizeProjectListItems(body.data);
             } catch (error) {
                 toast.error("Failed to fetch current user's projects");
                 throw error;

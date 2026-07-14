@@ -21,7 +21,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@desktop-shell/shared/*": ["../desktop-shell/shared/*"]
     }
   },
   "include": [
@@ -30,7 +31,8 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "**/*.mts",
+    "../desktop-shell/shared/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }

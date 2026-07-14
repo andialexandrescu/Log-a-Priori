@@ -5,42 +5,43 @@ import { useCreateProject } from "../api/use-create-project";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createProjectSchema } from "../schemas";
 import { useForm } from "react-hook-form";
-import { Chakra_Petch } from 'next/font/google';
-import { CreateMembersBulkSelect } from "../../members/components/create-members-bulk-select";
-import { ProjectRoleType } from "../../members/constants";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
+import { useDesktopUserId } from "@/lib/use-desktop-user-id";
+import { Loader2 } from "lucide-react";
+import { runProjectKnowledgeGraphAnalysis } from "@/features/knowledge-graph/lib/run-knowledge-graph-analysis";
+import { advanceAnalysisStep, describeKnowledgeGraphAnalysisState, resolveAnalysisStepFromLog, type AnalysisStepId, type KnowledgeGraphAnalysisPhase } from "@/features/knowledge-graph/lib/describe-knowledge-graph-analysis";
 
-const chakraPetch = Chakra_Petch({ subsets: ['latin'], weight: ['400', '700'] });
-
-const steps = ["Details", "Invite for collaboration", "File path", "Review"];
-const gridCols = `grid-cols-${steps.length}`;
+const steps = ["Details", "Folder", "Review"];
 
 interface ProjectSetupTabsProps {
   onSuccess?: (project: any) => void;
 }
 
 export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
-  const [members, setMembers] = useState<{ userId: string; role: ProjectRoleType }[]>([]); // collect members locally
-
+  const userId = useDesktopUserId();
+  const queryClient = useQueryClient();
   const [currentStep, setCurrentStep] = useState(0);
-  const progress = ((currentStep + 1) / steps.length) * 100;
+  const [isAnalyzingGraph, setIsAnalyzingGraph] = useState(false);
+  const [analysisPhase, setAnalysisPhase] = useState<KnowledgeGraphAnalysisPhase>("scanning");
+  const [analysisLog, setAnalysisLog] = useState<string | null>(null);
+  const [analysisStep, setAnalysisStep] = useState<AnalysisStepId>("clear");
 
   const handlePrevious = () => {
-    setCurrentStep(prev => Math.max(prev - 1, 0));
+    setCurrentStep((prev) => Math.max(prev - 1, 0));
   };
 
   const handleNext = () => {
-    setCurrentStep(Math.min(currentStep + 1, steps.length - 1));
+    setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1));
   };
 
   const { mutate, isPending } = useCreateProject();
+  const isBusy = isPending || isAnalyzingGraph;
 
   const form = useForm<z.infer<typeof createProjectSchema>>({
     resolver: zodResolver(createProjectSchema),
@@ -50,138 +51,190 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
     },
   });
 
-  const onSubmit = async (values: z.infer<typeof createProjectSchema>) => { // commit storage is auto managed per project in appdata
-    if (window.desktopControl) {
-      let projectRoot = null;
-      if (typeof window !== "undefined" && window.desktopControl) {
-        projectRoot = await window.desktopControl.getProjectRootDirectory();
-      }
-      if (!projectRoot) {
-        projectRoot = await window.desktopControl.selectProjectRootDirectory();
-        if (!projectRoot) {
-          toast.error("You must select a project root folder before creating the project");
-          return;
-        }
-      }
-      toast.success("Project root set!");
+  const onSubmit = async (values: z.infer<typeof createProjectSchema>) => {
+    if (!window.desktopControl) {
+      toast.error("Project root selection requires the desktop app");
+      return;
     }
+    if (!userId) {
+      toast.error("Sign in to select a project root folder");
+      return;
+    }
+
+    let projectRoot = await window.desktopControl.getProjectRootDirectory(userId);
+    if (!projectRoot) {
+      projectRoot = await window.desktopControl.selectProjectRootDirectory(userId);
+      if (!projectRoot) {
+        toast.error("You must select a project root folder before creating the project");
+        return;
+      }
+    }
+
+    setAnalysisLog(null);
+    setAnalysisStep("clear");
+    setAnalysisPhase("creating");
+    setIsAnalyzingGraph(true);
+
     mutate(
-      { 
-        project: values,
-        members
-      },
+      { project: values },
       {
         onSuccess: async (data) => {
+          const projectId = data?.data?.id;
+          if (projectId && userId) {
+            setAnalysisPhase("scanning");
+            setAnalysisLog(null);
+            setAnalysisStep("clear");
+            try {
+              await window.desktopControl?.promotePendingProjectRoot(userId, projectId);
+              const ok = await runProjectKnowledgeGraphAnalysis(queryClient, userId, projectId, {
+                showToast: false,
+                onProgress: ({ message, error }) => {
+                  setAnalysisLog(message);
+                  if (error) {
+                    setAnalysisPhase("error");
+                  }
+                },
+              });
+              setAnalysisPhase(ok ? "complete" : "error");
+              if (ok) {
+                toast.success("Project created, knowledge graph is ready");
+              } else {
+                toast.error("Project created, but knowledge graph analysis failed");
+              }
+            } catch {
+              setAnalysisPhase("error");
+              toast.error("Project created, but knowledge graph analysis failed");
+            } finally {
+              setIsAnalyzingGraph(false);
+            }
+          } else {
+            setIsAnalyzingGraph(false);
+            toast.success("Project created");
+          }
           onSuccess?.(data);
         },
         onError: (error) => {
+          setAnalysisPhase("error");
+          setIsAnalyzingGraph(false);
           console.error("Project creation failed:", error);
-        }
+        },
       }
     );
   };
 
-  return (
-    <form onSubmit={form.handleSubmit(onSubmit)} className="max-w-xl mx-auto p-6 space-y-6">
-      <Progress value={progress} className="w-full" />
+  const buildPhase: KnowledgeGraphAnalysisPhase = isPending
+    ? "creating"
+    : isAnalyzingGraph
+      ? analysisPhase
+      : "scanning";
 
-      <Tabs value={`${currentStep}`} onValueChange={(value) => setCurrentStep(parseInt(value))} className="w-full">
-        <TabsList className={`grid w-full ${gridCols}`}>
+  useEffect(() => {
+    const incoming = analysisLog ? resolveAnalysisStepFromLog(analysisLog) : null;
+    if (!incoming) {
+      return;
+    }
+    setAnalysisStep((previous) => advanceAnalysisStep(previous, incoming));
+  }, [analysisLog]);
+
+  const busyStatus = describeKnowledgeGraphAnalysisState({
+    phase: buildPhase,
+    currentStep: isAnalyzingGraph && buildPhase === "scanning" ? analysisStep : null,
+  });
+
+  return (
+    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+      {isBusy && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 shrink-0 animate-spin" />
+          <span>{busyStatus.title}...</span>
+        </div>
+      )}
+
+      <Tabs
+        value={`${currentStep}`}
+        onValueChange={(value) => !isBusy && setCurrentStep(parseInt(value, 10))}
+        className="w-full"
+      >
+        <TabsList className="grid w-full grid-cols-3">
           {steps.map((step, index) => (
-            <TabsTrigger key={step} value={`${index}`} disabled={false}>
+            <TabsTrigger key={step} value={`${index}`} disabled={isBusy}>
               {step}
             </TabsTrigger>
           ))}
         </TabsList>
 
         {steps.map((_, index) => (
-          <TabsContent key={index} value={`${index}`}>
-            <Card variant="glass">
-              <CardHeader>
-                <CardTitle className={`${chakraPetch.className} text-4xl`}>{steps[index]}</CardTitle>
-              </CardHeader>
+          <TabsContent key={index} value={`${index}`} className="space-y-4 mt-4">
+            {index === 0 && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="project-name">Project name</Label>
+                  <Input id="project-name" type="text" {...form.register("name")} />
+                  {form.formState.errors.name && (
+                    <p className="text-destructive text-xs">{form.formState.errors.name.message}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="project-description">Description (optional)</Label>
+                  <Input id="project-description" {...form.register("description")} />
+                  {form.formState.errors.description && (
+                    <p className="text-destructive text-xs">{form.formState.errors.description.message}</p>
+                  )}
+                </div>
+              </div>
+            )}
 
-              <CardContent>
-                {index === 0 && (
-                  <div className="space-y-4">
-                    <div>
-                      <Label className="block text-sm mb-1">Project name</Label>
-                      <Input className="w-full border p-2 rounded" type="text" {...form.register("name")}/>
-                      {form.formState.errors.name && (
-                        <p className="text-red-500 text-xs mt-1">{form.formState.errors.name.message}</p>
-                      )}
-                    </div>
+            {index === 1 && (
+              <div className="space-y-2">
+                <Label>Project root folder</Label>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Folder that contains your repository, it will be used to build the
+                  knowledge graph after create
+                </p>
+                <ProjectRootInlineSelector userId={userId} />
+              </div>
+            )}
 
-                    <div>
-                      <Label className="block text-sm mb-1">Description</Label>
-                      <Input className="w-full border p-2 rounded" {...form.register("description")}/>
-                      {form.formState.errors.name && (
-                        <p className="text-red-500 text-xs mt-1">{form.formState.errors.name.message}</p>
-                      )}
-                    </div>
-                  </div>
-                )}
+            {index === 2 && (
+              <div className="space-y-3 text-sm">
+                <div className="space-y-1">
+                  <p className="text-muted-foreground">Name</p>
+                  <p>{form.watch("name") || "None"}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-muted-foreground">Description</p>
+                  <p>{form.watch("description") || "None"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Project root folder</Label>
+                  <ProjectRootInlineSelector userId={userId} />
+                </div>
+              </div>
+            )}
 
-                {index === 1 && (
-                  <CreateMembersBulkSelect members={members} setMembers={setMembers} />
-                )}
-
-                {index === 2 && (
-                  <div className="space-y-6">
-                    <div>
-                      <p className="font-medium text-foreground mb-1">Project root folder</p>
-                      <ProjectRootInlineSelector />
-                    </div>
-                    <div className="p-4 bg-muted rounded-lg">
-                      <p className="text-sm text-muted-foreground">
-                        <strong>Commit storage:</strong> Commits will be saved to your appdata folder in a project specific folder, no manual configuration needed
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {index === 3 && (
-                  <div className="space-y-2">
-                    <p>Review all settings</p>
-                    <div className="text-sm text-muted-foreground">
-                      <p>Name: {form.watch("name") || "-"}</p>
-                      <p>Description: {form.watch("description") || "-"}</p>
-                      <p>Members ({members.length}):</p>
-                      <ul className="list-disc list-inside">
-                        {members.map((m, i) => (
-                          <li key={i}>{m.userId} - {m.role}</li>
-                        ))}
-                      </ul>
-                      <div className="mt-4">
-                        <p className="font-medium text-foreground">Project root folder</p>
-                        <ProjectRootInlineSelector />
-                      </div>
-                      <div className="mt-4 p-3 bg-muted rounded">
-                        <p className="text-xs text-muted-foreground">
-                          <strong>Commit storage:</strong> Auto managed per project in appdata
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-
-              <CardFooter className="flex justify-between">
-                <Button variant="glass" onClick={handlePrevious} disabled={currentStep === 0 || isPending}>
-                  Previous
+            <div className="flex justify-between gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handlePrevious}
+                disabled={currentStep === 0 || isBusy}
+              >
+                Previous
+              </Button>
+              {currentStep < steps.length - 1 ? (
+                <Button type="button" onClick={handleNext} disabled={isBusy}>
+                  Next
                 </Button>
-
-                {currentStep < steps.length - 1 ? (
-                  <Button variant="glass" onClick={handleNext} disabled={isPending}>
-                    Next
-                  </Button>
-                ) : (
-                  <Button variant="glass" type="submit" disabled={isPending}>
-                    {isPending ? "Creating..." : "Create Project"}
-                  </Button>
-                )}
-              </CardFooter>
-            </Card>
+              ) : (
+                <Button type="submit" disabled={isBusy}>
+                  {isAnalyzingGraph
+                    ? "Generating knowledge graph..."
+                    : isPending
+                      ? "Creating..."
+                      : "Create project"}
+                </Button>
+              )}
+            </div>
           </TabsContent>
         ))}
       </Tabs>
@@ -191,45 +244,73 @@ export const ProjectSetupTabs = ({ onSuccess }: ProjectSetupTabsProps) => {
 
 export default ProjectSetupTabs;
 
-function ProjectRootInlineSelector() {
+function ProjectRootInlineSelector({ userId }: { userId?: string }) {
   const [projectRoot, setProjectRoot] = useState<string | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
+  const hasDesktopBridge = typeof window !== "undefined" && !!window.desktopControl;
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      if (!hasDesktopBridge || !userId) {
+        if (!cancelled) {
+          setProjectRoot(null);
+          setIsLoading(false);
+        }
+        return;
+      }
       setIsLoading(true);
       try {
-        const root = await window.desktopControl?.getProjectRootDirectory();
+        const root = await window.desktopControl!.getProjectRootDirectory(userId);
         if (!cancelled) setProjectRoot(root ?? null);
       } finally {
         if (!cancelled) setIsLoading(false);
       }
     }
     load();
-    return () => { cancelled = true; };
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [hasDesktopBridge, userId]);
 
   const handleSelect = async () => {
-    if (!window.desktopControl) return;
+    if (!window.desktopControl) {
+      toast.error("Project root selection requires the desktop app");
+      return;
+    }
+    if (!userId) {
+      toast.error("Sign in to select a project root folder");
+      return;
+    }
     setIsSelecting(true);
     try {
-      const selected = await window.desktopControl.selectProjectRootDirectory();
+      const selected = await window.desktopControl.selectProjectRootDirectory(userId);
       if (selected) setProjectRoot(selected);
     } finally {
       setIsSelecting(false);
     }
   };
 
+  const chooseDisabled = isSelecting || !hasDesktopBridge || !userId;
+
   return (
-    <div className="flex items-center gap-2 mt-1">
-      <span className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm font-mono break-all">
-        {isLoading ? "Loading..." : projectRoot || "Not selected yet"}
-      </span>
-      <Button type="button" variant="outline" onClick={handleSelect} disabled={isSelecting}>
-        {isSelecting ? "Opening..." : "Choose"}
-      </Button>
+    <div className="space-y-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <span className="min-h-9 flex-1 rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono break-all">
+          {isLoading ? "Loading..." : projectRoot || "Not selected"}
+        </span>
+        <Button type="button" variant="outline" onClick={handleSelect} disabled={chooseDisabled}>
+          {isSelecting ? "Opening..." : "Choose folder"}
+        </Button>
+      </div>
+      {!hasDesktopBridge && (
+        <p className="text-xs text-muted-foreground">Open this app in the desktop shell to pick a folder</p>
+      )}
+      {hasDesktopBridge && !userId && (
+        <p className="text-xs text-muted-foreground">Sign in to enable folder selection</p>
+      )}
     </div>
   );
 }
