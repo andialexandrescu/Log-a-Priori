@@ -47,7 +47,9 @@ Here is the updated **Documents** table (now including the presentation and the 
 
 A short walkthrough of the application, recorded as `docs/demo.mov`. It shows the full pipeline end-to-end: selecting a project, building the structural graph, syncing commits from GitHub, running a natural-language query to retrieve a cluster, and generating an editable documentation draft.
 
-<video src="docs/demo.mov" controls width="100%"></video>
+[![Log a Priori — Demo](https://img.youtube.com/vi/PP0s95aX2w8/0.jpg)](https://youtu.be/PP0s95aX2w8)
+
+**Direct link:** [https://youtu.be/PP0s95aX2w8](https://youtu.be/PP0s95aX2w8)
 
 ---
 
